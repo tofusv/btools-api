@@ -50,7 +50,7 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
       "course_title_en": "ชื่อหลักสูตรภาษาอังกฤษ",
       "instructor": "ชื่อวิทยากร (ถ้ามี)",
       "duration_info": "รายละเอียดความยาวหลักสูตร เช่น 1 วัน (09.00-16.00 น.)",
-      "sections_order": ["rationale", "objectives", "agenda", "learning_methods", "target_audience"],
+      "sections_order": ["rationale", "objectives", "expected_outcomes", "agenda", "learning_methods", "target_audience", "duration", "equipment"],
       "rationale": [{"text": "ย่อหน้าบรรยาย"}, {"bullets": ["ข้อย่อย 1", "ข้อย่อย 2"]}],
       "objectives": [
         {
@@ -60,6 +60,7 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
           ]
         }
       ],
+      "expected_outcomes": ["สิ่งที่จะได้รับ 1", "สิ่งที่จะได้รับ 2"],
       "agenda": [
         {
           "time": "09.00 - 10.30 น.",
@@ -78,7 +79,9 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
         }
       ],
       "learning_methods": ["รูปแบบ 1", "รูปแบบ 2"],
-      "target_audience": ["กลุ่มเป้าหมาย 1"]
+      "target_audience": ["กลุ่มเป้าหมาย 1"],
+      "duration": ["ระยะเวลา 1 วัน (ถ้ามีเขียนแยกไว้)"],
+      "equipment": ["อุปกรณ์ที่ต้องเตรียม (ถ้ามี)"]
     }
     
     กฎเหล็กในการแยกโครงสร้างเนื้อหา (Strict Formatting Rules - MUST FOLLOW):
@@ -89,7 +92,7 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
     5. ตรวจสอบความซ้อนของหัวข้อใน Agenda อย่างละเอียดที่สุด:
        - หากมีหัวข้อหลักแล้วมีข้อย่อยซ้อนลงไปอีกชั้น (เช่น "ความคาดหวัง..." แล้วมีข้อย่อย "นิยาม..." และ "ผลกระทบ...") **ต้องจัดให้อยู่ในรูปแบบวัตถุ {"title": "ความคาดหวัง...", "sub_topics": ["นิยาม...", "ผลกระทบ..."]}** ห้ามดึงออกมาวางเป็นหัวข้อเรียงระนาบเดียวกันเด็ดขาด!
     6. รูปแบบผลลัพธ์ต้องเป็น JSON ที่ valid เท่านั้น
-    7. **สำคัญมาก:** ต้องส่งคืนคีย์หมวดหมู่หลัก (H2) ใน JSON ให้ครบทั้ง 5 หมวดเสมอ ได้แก่ `rationale`, `objectives`, `agenda`, `learning_methods`, `target_audience` ห้ามตัดหมวดหมู่ใดทิ้งเด็ดขาด! (สามารถจัดลำดับใหม่ใน `sections_order` ได้ตามความเหมาะสม แต่ข้อมูลทั้ง 5 หมวดต้องถูกเติมให้ครบถ้วนที่สุดเท่าที่จะหาได้จากต้นฉบับ)
+    7. **สำคัญมาก:** ห้ามตัดหัวข้อใดๆ ทิ้งเด็ดขาด! หากต้นฉบับมีหัวข้อนอกเหนือจาก 5 หมวดหลัก (เช่น "สิ่งที่คาดหวัง/ประโยชน์" ให้ใส่ใน `expected_outcomes`, "อุปกรณ์" ให้ใส่ใน `equipment`, หรือ "ระยะเวลา" ให้ใส่ใน `duration`) คุณต้องดึงข้อมูลมาใส่เป็นคีย์ให้ครบทุกหัวข้อตามที่วิทยากรเขียนมา ห้ามตกหล่นเด็ดขาด
     
     ข้อความต้นฉบับ:
     """ + raw_text
