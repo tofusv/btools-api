@@ -18,12 +18,7 @@ def clean_bullet_text(text):
         text = str(text)
     txt = text.strip()
     # Strip leading bullet markers
-    txt = re.sub(r'^[•\-\*✓👤\s]+', '', txt)
-    # Strip alphabetical prefixes like "a. ", "b. ", "c. ", "a) ", "b) ", "(a) ", "A. ", "B. "
-    txt = re.sub(r'^\(?[a-zA-Z]\)[\.\s]*', '', txt)
-    txt = re.sub(r'^[a-zA-Z][\.\)]\s*', '', txt)
-    # Strip leading numbers like "1. ", "2. ", "1) "
-    txt = re.sub(r'^\d+[\.\)]\s*', '', txt)
+    txt = re.sub(r'^[\s•\-\*✓👤]+', '', txt)
     return txt.strip()
 
 DEFAULT_TEMPLATE = r"C:\Users\Sert-windows\.gemini\antigravity\scratch\skills\course_outline_generator\templates\template.docx"
@@ -165,17 +160,20 @@ def add_bullet_p(doc, text, font_size=10, bold=False, left_indent_in=0.5, hangin
     p.paragraph_format.left_indent = Inches(left_indent_in)
     p.paragraph_format.first_line_indent = Inches(-hanging_in)
 
-    pPr = p._p.get_or_add_pPr()
-    numPr = OxmlElement('w:numPr')
-    ilvl = OxmlElement('w:ilvl')
-    ilvl.set(qn('w:val'), '0')
-    numId = OxmlElement('w:numId')
-    numId.set(qn('w:val'), '1')
-    numPr.append(ilvl)
-    numPr.append(numId)
-    pPr.append(numPr)
-
     clean_text = clean_bullet_text(text)
+    
+    # ถ้าข้อความไม่ได้ขึ้นต้นด้วยตัวเลข (เช่น 1. หรือ a.) ให้ใส่ Bullet ของ Word
+    if not re.match(r'^(\d+[\.\)]|[a-zA-Z][\.\)])\s', clean_text):
+        pPr = p._p.get_or_add_pPr()
+        numPr = OxmlElement('w:numPr')
+        ilvl = OxmlElement('w:ilvl')
+        ilvl.set(qn('w:val'), '0')
+        numId = OxmlElement('w:numId')
+        numId.set(qn('w:val'), '1')
+        numPr.append(ilvl)
+        numPr.append(numId)
+        pPr.append(numPr)
+
     run = p.add_run(clean_text)
     run.font.name = STRICT_FONT_NAME
     run.font.size = Pt(font_size)
@@ -396,6 +394,7 @@ def generate_doc(data, output_path, template_path=None):
             section.right_margin = Inches(0.787)
 
     fix_footer_page_number(doc)
+    sanitize_pgmar(doc)
 
     # Title TH (H1: 13pt Bold)
     if data.get("course_title_th"):
@@ -681,17 +680,18 @@ def generate_doc(data, output_path, template_path=None):
                                 p_t.paragraph_format.left_indent = Inches(0.12)
                                 p_t.paragraph_format.first_line_indent = Inches(-0.12)
 
-                                pPr_t = p_t._p.get_or_add_pPr()
-                                numPr_t = OxmlElement('w:numPr')
-                                ilvl_t = OxmlElement('w:ilvl')
-                                ilvl_t.set(qn('w:val'), '0')
-                                numId_t = OxmlElement('w:numId')
-                                numId_t.set(qn('w:val'), '1')
-                                numPr_t.append(ilvl_t)
-                                numPr_t.append(numId_t)
-                                pPr_t.append(numPr_t)
-
                                 clean_t = clean_bullet_text(t_title)
+                                if not re.match(r'^(\d+[\.\)]|[a-zA-Z][\.\)])\s', clean_t):
+                                    pPr_t = p_t._p.get_or_add_pPr()
+                                    numPr_t = OxmlElement('w:numPr')
+                                    ilvl_t = OxmlElement('w:ilvl')
+                                    ilvl_t.set(qn('w:val'), '0')
+                                    numId_t = OxmlElement('w:numId')
+                                    numId_t.set(qn('w:val'), '1')
+                                    numPr_t.append(ilvl_t)
+                                    numPr_t.append(numId_t)
+                                    pPr_t.append(numPr_t)
+
                                 run_t = p_t.add_run(clean_t)
                                 run_t.font.name = STRICT_FONT_NAME
                                 run_t.font.size = Pt(10)
@@ -705,17 +705,18 @@ def generate_doc(data, output_path, template_path=None):
                                 p_sub.paragraph_format.left_indent = Inches(0.28)
                                 p_sub.paragraph_format.first_line_indent = Inches(-0.12)
 
-                                pPr_sub = p_sub._p.get_or_add_pPr()
-                                numPr_sub = OxmlElement('w:numPr')
-                                ilvl_sub = OxmlElement('w:ilvl')
-                                ilvl_sub.set(qn('w:val'), '0')
-                                numId_sub = OxmlElement('w:numId')
-                                numId_sub.set(qn('w:val'), '1')
-                                numPr_sub.append(ilvl_sub)
-                                numPr_sub.append(numId_sub)
-                                pPr_sub.append(numPr_sub)
-
                                 clean_sub = clean_bullet_text(sub_item)
+                                if not re.match(r'^(\d+[\.\)]|[a-zA-Z][\.\)])\s', clean_sub):
+                                    pPr_sub = p_sub._p.get_or_add_pPr()
+                                    numPr_sub = OxmlElement('w:numPr')
+                                    ilvl_sub = OxmlElement('w:ilvl')
+                                    ilvl_sub.set(qn('w:val'), '0')
+                                    numId_sub = OxmlElement('w:numId')
+                                    numId_sub.set(qn('w:val'), '1')
+                                    numPr_sub.append(ilvl_sub)
+                                    numPr_sub.append(numId_sub)
+                                    pPr_sub.append(numPr_sub)
+
                                 run_sub = p_sub.add_run(clean_sub)
                                 run_sub.font.name = STRICT_FONT_NAME
                                 run_sub.font.size = Pt(10)
@@ -735,17 +736,18 @@ def generate_doc(data, output_path, template_path=None):
                             p_t.paragraph_format.left_indent = Inches(0.28 if is_sub else 0.12)
                             p_t.paragraph_format.first_line_indent = Inches(-0.12)
 
-                            pPr_t = p_t._p.get_or_add_pPr()
-                            numPr_t = OxmlElement('w:numPr')
-                            ilvl_t = OxmlElement('w:ilvl')
-                            ilvl_t.set(qn('w:val'), '0')
-                            numId_t = OxmlElement('w:numId')
-                            numId_t.set(qn('w:val'), '1')
-                            numPr_t.append(ilvl_t)
-                            numPr_t.append(numId_t)
-                            pPr_t.append(numPr_t)
-
                             clean_t = clean_bullet_text(topic)
+                            if not re.match(r'^(\d+[\.\)]|[a-zA-Z][\.\)])\s', clean_t):
+                                pPr_t = p_t._p.get_or_add_pPr()
+                                numPr_t = OxmlElement('w:numPr')
+                                ilvl_t = OxmlElement('w:ilvl')
+                                ilvl_t.set(qn('w:val'), '0')
+                                numId_t = OxmlElement('w:numId')
+                                numId_t.set(qn('w:val'), '1')
+                                numPr_t.append(ilvl_t)
+                                numPr_t.append(numId_t)
+                                pPr_t.append(numPr_t)
+
                             run_t = p_t.add_run(clean_t)
                             run_t.font.name = STRICT_FONT_NAME
                             run_t.font.size = Pt(10)
@@ -813,13 +815,17 @@ def generate_doc(data, output_path, template_path=None):
                 r.font.name = STRICT_FONT_NAME
                 r.font.size = Pt(10)
                 r.bold = True
-                p_desc = doc.add_paragraph()
-                p_desc.paragraph_format.space_before = Pt(0)
-                p_desc.paragraph_format.space_after = Pt(4)
-                p_desc.paragraph_format.line_spacing = 1.35
-                r_d = p_desc.add_run(ws.get('description', ''))
-                r_d.font.name = STRICT_FONT_NAME
-                r_d.font.size = Pt(10)
+                if ws.get("description"):
+                    p_desc = doc.add_paragraph()
+                    p_desc.paragraph_format.space_before = Pt(0)
+                    p_desc.paragraph_format.space_after = Pt(4)
+                    p_desc.paragraph_format.line_spacing = 1.35
+                    r_d = p_desc.add_run(ws.get("description", ""))
+                    r_d.font.name = STRICT_FONT_NAME
+                    r_d.font.size = Pt(10)
+                if ws.get("bullets"):
+                    for b in ws.get("bullets"):
+                        add_bullet_p(doc, b)
             add_blank_line(doc)
 
         elif sec_key == "teaching_style" and data.get("teaching_style"):
@@ -937,6 +943,16 @@ def generate_doc(data, output_path, template_path=None):
                 r_lj.font.size = Pt(10)
             add_blank_line(doc)
 
+        elif sec_key == "additional_sections" and data.get("additional_sections"):
+            for sec in data["additional_sections"]:
+                add_heading(doc, sec.get("title", "หัวข้ออื่นๆ"), font_size=12)
+                if sec.get("description"):
+                    add_rationale_p(doc, sec.get("description"))
+                if sec.get("bullets"):
+                    for b in sec.get("bullets"):
+                        add_bullet_p(doc, b)
+                add_blank_line(doc)
+
         elif sec_key == "followup_program" and data.get("followup_program"):
             add_heading(doc, data.get("followup_program_title", "Follow-up Program"), font_size=12)
             if data.get("followup_program_subhead"):
@@ -1025,6 +1041,19 @@ def generate_doc(data, output_path, template_path=None):
                                 r.font.size = Pt(10)
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    # Add debug info for model usage and fallback reason
+    if data.get("_ai_model_used"):
+        p_debug = doc.add_paragraph()
+        p_debug.paragraph_format.space_before = Pt(24)
+        p_debug.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        debug_text = f"[Generated by: {data.get('_ai_model_used')}]"
+        if data.get("_fallback_reason"):
+            debug_text += f"\n[Fallback Reason: {data.get('_fallback_reason')}]"
+        r_debug = p_debug.add_run(debug_text)
+        r_debug.font.name = "Arial"
+        r_debug.font.size = Pt(8)
+        r_debug.font.color.rgb = RGBColor(128, 128, 128)
+
     doc.save(output_path)
     print(f"Successfully generated course outline at: {output_path}")
 
