@@ -272,56 +272,6 @@ def fix_footer_page_number(doc):
                     r_dwg.append(dwg)
                     p._p.append(r_dwg)
 
-def generate_doc(data, output_path, template_path=None):
-    if not template_path or not os.path.exists(template_path):
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        rel_template = os.path.abspath(os.path.join(script_dir, "..", "templates", "template.docx"))
-        if os.path.exists(rel_template):
-            template_path = rel_template
-        elif os.path.exists(DEFAULT_TEMPLATE):
-            template_path = DEFAULT_TEMPLATE
-        elif os.path.exists(r"D:\Course outline\00_Reference_Template\B Tools_หลักสูตร Data Analysis for Better Results.docx"):
-            template_path = r"D:\Course outline\00_Reference_Template\B Tools_หลักสูตร Data Analysis for Better Results.docx"
-            
-    if template_path and os.path.exists(template_path):
-        doc = docx.Document(template_path)
-        sanitize_pgmar(doc)
-        for p in list(doc.paragraphs):
-            p._p.getparent().remove(p._p)
-        for t in list(doc.tables):
-            t._element.getparent().remove(t._element)
-    else:
-        doc = docx.Document()
-        for section in doc.sections:
-            section.top_margin = Inches(0.787)
-            section.bottom_margin = Inches(0.59)
-            section.left_margin = Inches(0.787)
-            section.right_margin = Inches(0.787)
-
-    fix_footer_page_number(doc)
-
-    # Title TH (H1: 13pt Bold)
-    if data.get("course_title_th"):
-        p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(0)
-        p.paragraph_format.space_after = Pt(2)
-        p.paragraph_format.line_spacing = 1.5
-        run = p.add_run(f"หลักสูตร: {data['course_title_th']}")
-        run.font.name = STRICT_FONT_NAME
-        run.font.size = Pt(13)
-        run.bold = True
-
-    # Title EN
-    if data.get("course_title_en"):
-        p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(0)
-        p.paragraph_format.space_after = Pt(4)
-        p.paragraph_format.line_spacing = 1.5
-        run = p.add_run(data['course_title_en'])
-        run.font.name = STRICT_FONT_NAME
-        run.font.size = Pt(13)
-        run.bold = True
-
 def render_workshop_cell(cell, w_data):
     if not w_data:
         return
@@ -413,6 +363,56 @@ def render_workshop_cell(cell, w_data):
             run_n = p_b.add_run(clean_bullet_text(b_item))
             run_n.font.name = STRICT_FONT_NAME
             run_n.font.size = Pt(10)
+
+def generate_doc(data, output_path, template_path=None):
+    if not template_path or not os.path.exists(template_path):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        rel_template = os.path.abspath(os.path.join(script_dir, "..", "templates", "template.docx"))
+        if os.path.exists(rel_template):
+            template_path = rel_template
+        elif os.path.exists(DEFAULT_TEMPLATE):
+            template_path = DEFAULT_TEMPLATE
+        elif os.path.exists(r"D:\Course outline\00_Reference_Template\B Tools_หลักสูตร Data Analysis for Better Results.docx"):
+            template_path = r"D:\Course outline\00_Reference_Template\B Tools_หลักสูตร Data Analysis for Better Results.docx"
+            
+    if template_path and os.path.exists(template_path):
+        doc = docx.Document(template_path)
+        sanitize_pgmar(doc)
+        for p in list(doc.paragraphs):
+            p._p.getparent().remove(p._p)
+        for t in list(doc.tables):
+            t._element.getparent().remove(t._element)
+    else:
+        doc = docx.Document()
+        for section in doc.sections:
+            section.top_margin = Inches(0.787)
+            section.bottom_margin = Inches(0.59)
+            section.left_margin = Inches(0.787)
+            section.right_margin = Inches(0.787)
+
+    fix_footer_page_number(doc)
+
+    # Title TH (H1: 13pt Bold)
+    if data.get("course_title_th"):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(2)
+        p.paragraph_format.line_spacing = 1.5
+        run = p.add_run(f"หลักสูตร: {data['course_title_th']}")
+        run.font.name = STRICT_FONT_NAME
+        run.font.size = Pt(13)
+        run.bold = True
+
+    # Title EN
+    if data.get("course_title_en"):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(4)
+        p.paragraph_format.line_spacing = 1.5
+        run = p.add_run(data['course_title_en'])
+        run.font.name = STRICT_FONT_NAME
+        run.font.size = Pt(13)
+        run.bold = True
 
     add_blank_line(doc)
 
