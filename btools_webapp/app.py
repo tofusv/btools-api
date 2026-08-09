@@ -38,9 +38,9 @@ def get_template_docx_path():
 
 def call_gemini_api(raw_text: str, api_key: str) -> dict:
     models_to_try = [
-        "gemini-3.1-pro-preview",
         "gemini-3.6-flash",
-        "gemini-3.5-flash"
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite"
     ]
     
     prompt = """
@@ -104,46 +104,58 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
     ข้อความต้นฉบับ:
     """ + raw_text
 
+    api_keys_list = [k.strip() for k in api_key.split(",") if k.strip()]
+    if not api_keys_list:
+        api_keys_list = [api_key]
+
     last_error = None
     
     for model in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "temperature": 0.0
+        for key_idx, current_key in enumerate(api_keys_list):
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={current_key}"
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "temperature": 0.0
+                }
             }
-        }
-        
-        for attempt in range(3): # รอและลองใหม่สูงสุด 3 ครั้งต่อโมเดล
-            try:
-                print(f"กำลังส่งข้อมูลหา {model} (ครั้งที่ {attempt+1})...")
-                response = requests.post(url, json=payload, timeout=30)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    text_out = data["candidates"][0]["content"]["parts"][0]["text"]
-                    parsed_data = json.loads(text_out)
-                    parsed_data["_ai_model_used"] = model  # Inject the model name
-                    if model != models_to_try[0] and last_error:
-                        parsed_data["_fallback_reason"] = last_error
-                    return parsed_data
-                else:
-                    error_msg = response.text
-                    last_error = f"{model} failed: {response.status_code}"
+            
+            for attempt in range(2): # ลองใหม่สูงสุด 2 ครั้งต่อ Key
+                try:
+                    print(f"กำลังส่งข้อมูลหา {model} (Key {key_idx+1}/{len(api_keys_list)} - ครั้งที่ {attempt+1})...")
+                    response = requests.post(url, json=payload, timeout=30)
                     
-                    if response.status_code in (404, 403, 400):
-                        print(f"ข้าม {model} เนื่องจากไม่มีสิทธิ์ใช้งานหรือไม่มีโมเดลนี้ ({response.status_code})")
-                        break # ข้ามไปโมเดลถัดไปทันที ไม่ต้องรอ
+                    if response.status_code == 200:
+                        data = response.json()
+                        text_out = data["candidates"][0]["content"]["parts"][0]["text"]
+                        parsed_data = json.loads(text_out)
+                        parsed_data["_ai_model_used"] = model  # Inject the model name
+                        if model != models_to_try[0] and last_error:
+                            parsed_data["_fallback_reason"] = last_error
+                        return parsed_data
+                    else:
+                        error_msg = response.text
+                        last_error = f"{model} (Key {key_idx+1}) failed: {response.status_code}"
                         
-                    print(f"เกิดข้อผิดพลาดกับ {model} ({response.status_code}): รอ 8 วินาทีแล้วลองใหม่... - {error_msg}")
-                    time.sleep(8) # รอ 8 วินาทีเฉพาะตอนติด Rate Limit หรือ Server Error
-                    
-            except Exception as e:
-                print(f"Exception with {model}: {e}")
-                last_error = str(e)
-                time.sleep(8)
+                        if response.status_code in (404, 403, 400):
+                            print(f"ข้าม {model} เนื่องจากไม่มีสิทธิ์ใช้งานหรือไม่มีโมเดลนี้ ({response.status_code})")
+                            break # ข้ามไปโมเดลถัดไป
+                        elif response.status_code == 429:
+                            if len(api_keys_list) > 1 and key_idx < len(api_keys_list) - 1:
+                                print(f"ติด Rate Limit 429 สำหรับ Key {key_idx+1}: สลับไปใช้ Key {key_idx+2} ทันที!")
+                            else:
+                                print(f"Key ทั้งหมดของ {model} โควต้าเต็ม (429) แล้ว! กำลังข้ามไปใช้โมเดลถัดไป...")
+                            break # ข้ามไป Key หรือ Model ถัดไปทันที
+                            
+                        print(f"เกิดข้อผิดพลาดกับ {model} ({response.status_code}): รอ 8 วินาทีแล้วลองใหม่... - {error_msg}")
+                        time.sleep(8)
+                        
+                except Exception as e:
+                    print(f"Exception with {model} Key {key_idx+1}: {e}")
+                    last_error = str(e)
+                    time.sleep(5)
+
             
     raise ValueError(f"ไม่สามารถประมวลผลด้วย Gemini API ได้ครบทุกโมเดล: {last_error}")
 
