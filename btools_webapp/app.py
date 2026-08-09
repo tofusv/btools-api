@@ -120,7 +120,9 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
             if response.status_code == 200:
                 data = response.json()
                 text = data["candidates"][0]["content"]["parts"][0]["text"]
-                return json.loads(text)
+                parsed_data = json.loads(text)
+                parsed_data["_ai_model_used"] = model  # Inject the model name
+                return parsed_data
             else:
                 error_msg = response.text
                 print(f"เกิดข้อผิดพลาดกับ {model}: {response.status_code} - {error_msg}")
@@ -153,7 +155,9 @@ def format_course_text(req: FormatTextRequest):
         title_clean = re.sub(r'\s+', ' ', title_clean)
         if not title_clean:
             title_clean = "Course Outline"
-        filename = f"B Tools_{title_clean}.docx"
+            
+        ai_model_used = data.get("_ai_model_used", "gemini-unknown")
+        filename = f"B Tools_{title_clean} ({ai_model_used}).docx"
         
         tmp_dir = tempfile.mkdtemp()
         output_filepath = os.path.join(tmp_dir, filename)
