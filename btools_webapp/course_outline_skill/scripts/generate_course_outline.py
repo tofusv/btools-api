@@ -12,8 +12,10 @@ from docx.oxml.ns import qn
 STRICT_FONT_NAME = "Sarabun"
 
 def clean_bullet_text(text):
+    if text is None:
+        return ""
     if not isinstance(text, str):
-        return str(text)
+        text = str(text)
     txt = text.strip()
     # Strip leading bullet markers
     txt = re.sub(r'^[•\-\*✓👤\s]+', '', txt)
@@ -384,7 +386,7 @@ def generate_doc(data, output_path, template_path=None):
 
         elif sec_key == "agenda" and data.get("agenda"):
             add_heading(doc, data.get("agenda_title", "Agenda"), font_size=12)
-            has_time = any(item.get("time", "").strip() for item in data["agenda"])
+            has_time = any((item.get("time") or "").strip() for item in data["agenda"] if isinstance(item, dict))
             if has_time:
                 table = doc.add_table(rows=1, cols=2)
                 try:
@@ -503,7 +505,8 @@ def generate_doc(data, output_path, template_path=None):
                             p_t.paragraph_format.space_after = Pt(2)
                             p_t.paragraph_format.line_spacing = 1.35
 
-                            is_sub = topic.startswith("  ") or topic.startswith("\t") or topic.startswith(" -") or topic.startswith(" •") or topic.startswith("- ")
+                            topic_str = str(topic or "")
+                            is_sub = topic_str.startswith("  ") or topic_str.startswith("\t") or topic_str.startswith(" -") or topic_str.startswith(" •") or topic_str.startswith("- ")
                             p_t.paragraph_format.left_indent = Inches(0.28 if is_sub else 0.12)
                             p_t.paragraph_format.first_line_indent = Inches(-0.12)
 
