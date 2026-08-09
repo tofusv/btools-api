@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import json
 import docx
 from docx.shared import Pt, Inches, RGBColor
@@ -9,6 +10,17 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 STRICT_FONT_NAME = "Sarabun"
+
+def clean_bullet_text(text):
+    if not isinstance(text, str):
+        return str(text)
+    txt = text.strip()
+    # Strip leading bullet markers
+    txt = re.sub(r'^[•\-\*✓👤\s]+', '', txt)
+    # Strip alphabetical prefixes like "a. ", "b. ", "c. ", "a) ", "b) ", "(a) ", "A. ", "B. "
+    txt = re.sub(r'^\(?[a-zA-Z]\)[\.\s]*', '', txt)
+    txt = re.sub(r'^[a-zA-Z][\.\)]\s*', '', txt)
+    return txt.strip()
 
 DEFAULT_TEMPLATE = r"C:\Users\Sert-windows\.gemini\antigravity\scratch\skills\course_outline_generator\templates\template.docx"
 
@@ -159,7 +171,7 @@ def add_bullet_p(doc, text, font_size=10, bold=False, left_indent_in=0.5, hangin
     numPr.append(numId)
     pPr.append(numPr)
 
-    clean_text = text.lstrip("•-*✓👤 ").strip()
+    clean_text = clean_bullet_text(text)
     run = p.add_run(clean_text)
     run.font.name = STRICT_FONT_NAME
     run.font.size = Pt(font_size)
@@ -428,31 +440,87 @@ def generate_doc(data, output_path, template_path=None):
 
                     first_topic = True
                     for topic in item.get("topics", []):
-                        if first_topic and not module_title:
-                            p_t = p
-                            first_topic = False
-                        else:
-                            p_t = row_cells[1].add_paragraph()
-                        p_t.paragraph_format.space_before = Pt(0)
-                        p_t.paragraph_format.space_after = Pt(2)
-                        p_t.paragraph_format.line_spacing = 1.35
-                        p_t.paragraph_format.left_indent = Inches(0.12)
-                        p_t.paragraph_format.first_line_indent = Inches(-0.12)
+                        if isinstance(topic, dict):
+                            t_title = topic.get("title") or topic.get("text") or ""
+                            if t_title:
+                                if first_topic and not module_title:
+                                    p_t = p
+                                    first_topic = False
+                                else:
+                                    p_t = row_cells[1].add_paragraph()
+                                p_t.paragraph_format.space_before = Pt(0)
+                                p_t.paragraph_format.space_after = Pt(2)
+                                p_t.paragraph_format.line_spacing = 1.35
+                                p_t.paragraph_format.left_indent = Inches(0.12)
+                                p_t.paragraph_format.first_line_indent = Inches(-0.12)
 
-                        pPr_t = p_t._p.get_or_add_pPr()
-                        numPr_t = OxmlElement('w:numPr')
-                        ilvl_t = OxmlElement('w:ilvl')
-                        ilvl_t.set(qn('w:val'), '0')
-                        numId_t = OxmlElement('w:numId')
-                        numId_t.set(qn('w:val'), '1')
-                        numPr_t.append(ilvl_t)
-                        numPr_t.append(numId_t)
-                        pPr_t.append(numPr_t)
+                                pPr_t = p_t._p.get_or_add_pPr()
+                                numPr_t = OxmlElement('w:numPr')
+                                ilvl_t = OxmlElement('w:ilvl')
+                                ilvl_t.set(qn('w:val'), '0')
+                                numId_t = OxmlElement('w:numId')
+                                numId_t.set(qn('w:val'), '1')
+                                numPr_t.append(ilvl_t)
+                                numPr_t.append(numId_t)
+                                pPr_t.append(numPr_t)
 
-                        clean_t = topic.lstrip("• ").strip()
-                        run_t = p_t.add_run(clean_t)
-                        run_t.font.name = STRICT_FONT_NAME
-                        run_t.font.size = Pt(10)
+                                clean_t = clean_bullet_text(t_title)
+                                run_t = p_t.add_run(clean_t)
+                                run_t.font.name = STRICT_FONT_NAME
+                                run_t.font.size = Pt(10)
+
+                            sub_list = topic.get("sub_topics") or topic.get("sub_bullets") or []
+                            for sub_item in sub_list:
+                                p_sub = row_cells[1].add_paragraph()
+                                p_sub.paragraph_format.space_before = Pt(0)
+                                p_sub.paragraph_format.space_after = Pt(2)
+                                p_sub.paragraph_format.line_spacing = 1.35
+                                p_sub.paragraph_format.left_indent = Inches(0.28)
+                                p_sub.paragraph_format.first_line_indent = Inches(-0.12)
+
+                                pPr_sub = p_sub._p.get_or_add_pPr()
+                                numPr_sub = OxmlElement('w:numPr')
+                                ilvl_sub = OxmlElement('w:ilvl')
+                                ilvl_sub.set(qn('w:val'), '1')
+                                numId_sub = OxmlElement('w:numId')
+                                numId_sub.set(qn('w:val'), '1')
+                                numPr_sub.append(ilvl_sub)
+                                numPr_sub.append(numId_sub)
+                                pPr_sub.append(numPr_sub)
+
+                                clean_sub = clean_bullet_text(sub_item)
+                                run_sub = p_sub.add_run(clean_sub)
+                                run_sub.font.name = STRICT_FONT_NAME
+                                run_sub.font.size = Pt(10)
+
+                        elif isinstance(topic, str):
+                            if first_topic and not module_title:
+                                p_t = p
+                                first_topic = False
+                            else:
+                                p_t = row_cells[1].add_paragraph()
+                            p_t.paragraph_format.space_before = Pt(0)
+                            p_t.paragraph_format.space_after = Pt(2)
+                            p_t.paragraph_format.line_spacing = 1.35
+
+                            is_sub = topic.startswith("  ") or topic.startswith("\t") or topic.startswith(" -") or topic.startswith(" •") or topic.startswith("- ")
+                            p_t.paragraph_format.left_indent = Inches(0.28 if is_sub else 0.12)
+                            p_t.paragraph_format.first_line_indent = Inches(-0.12)
+
+                            pPr_t = p_t._p.get_or_add_pPr()
+                            numPr_t = OxmlElement('w:numPr')
+                            ilvl_t = OxmlElement('w:ilvl')
+                            ilvl_t.set(qn('w:val'), '1' if is_sub else '0')
+                            numId_t = OxmlElement('w:numId')
+                            numId_t.set(qn('w:val'), '1')
+                            numPr_t.append(ilvl_t)
+                            numPr_t.append(numId_t)
+                            pPr_t.append(numPr_t)
+
+                            clean_t = clean_bullet_text(topic)
+                            run_t = p_t.add_run(clean_t)
+                            run_t.font.name = STRICT_FONT_NAME
+                            run_t.font.size = Pt(10)
 
                     if item.get("workshop"):
                         p_w = row_cells[1].add_paragraph()
