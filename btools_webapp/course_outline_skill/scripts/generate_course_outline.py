@@ -346,29 +346,46 @@ def generate_doc(data, output_path, template_path=None):
                         add_blank_line(doc)
                     elif item.get("text"):
                         add_blank_line(doc)
-                elif isinstance(item, str):
-                    add_rationale_p(doc, item)
-                    add_blank_line(doc)
+def is_intro_sentence(text):
+    if not text or not isinstance(text, str):
+        return False
+    t = text.strip()
+    intro_keywords = ["เพื่อให้", "เมื่อจบ", "เมื่อสิ้นสุด", "วัตถุประสงค์", "ผู้เข้าอบรมจะสามารถ", "ผู้เข้าอบรมสามารถ"]
+    return any(kw in t for kw in intro_keywords) or t.endswith(":") or t.endswith("ดังนี้") or t.endswith("สามารถ")
+
+def add_subhead_p(doc, text, font_size=10, left_indent_in=0.5):
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(3)
+    p.paragraph_format.line_spacing = 1.35
+    p.paragraph_format.left_indent = Inches(left_indent_in)
+    run = p.add_run(text.strip())
+    run.font.name = STRICT_FONT_NAME
+    run.font.size = Pt(font_size)
+    run.bold = False
+    return p
 
         elif sec_key == "objectives" and data.get("objectives"):
             add_heading(doc, data.get("objectives_title", "วัตถุประสงค์ของหลักสูตร"), font_size=12)
             if data.get("objectives_subhead"):
-                p = doc.add_paragraph()
-                p.paragraph_format.space_after = Pt(3)
-                p.paragraph_format.line_spacing = 1.35
-                r = p.add_run(data["objectives_subhead"])
-                r.font.name = STRICT_FONT_NAME
-                r.font.size = Pt(10)
-                r.bold = False
+                add_subhead_p(doc, data["objectives_subhead"])
             for item in data["objectives"]:
                 if isinstance(item, dict):
-                    if item.get("title"):
-                        add_bullet_p(doc, item["title"], left_indent_in=0.5, hanging_in=0.25)
-                    if item.get("sub_bullets"):
-                        for sub in item["sub_bullets"]:
-                            add_bullet_p(doc, sub, left_indent_in=0.75, hanging_in=0.25)
+                    t_title = item.get("title") or item.get("text") or ""
+                    if t_title:
+                        if is_intro_sentence(t_title):
+                            add_subhead_p(doc, t_title)
+                        else:
+                            add_bullet_p(doc, t_title, left_indent_in=0.5, hanging_in=0.25)
+                    sub_list = item.get("sub_bullets") or item.get("bullets") or []
+                    for sub in sub_list:
+                        sub_indent = 0.5 if (t_title and is_intro_sentence(t_title)) else 0.75
+                        add_bullet_p(doc, sub, left_indent_in=sub_indent, hanging_in=0.25)
                 elif isinstance(item, str):
-                    add_bullet_p(doc, item)
+                    if is_intro_sentence(item):
+                        add_subhead_p(doc, item)
+                    else:
+                        add_bullet_p(doc, item, left_indent_in=0.5, hanging_in=0.25)
             add_blank_line(doc)
 
         elif sec_key == "topics" and data.get("topics"):
@@ -602,31 +619,88 @@ def generate_doc(data, output_path, template_path=None):
 
                     first_topic = True
                     for topic in item.get("topics", []):
-                        if first_topic and not module_title:
-                            p_t = p
-                            first_topic = False
-                        else:
-                            p_t = row_cells[0].add_paragraph()
-                        p_t.paragraph_format.space_before = Pt(0)
-                        p_t.paragraph_format.space_after = Pt(2)
-                        p_t.paragraph_format.line_spacing = 1.35
-                        p_t.paragraph_format.left_indent = Inches(0.12)
-                        p_t.paragraph_format.first_line_indent = Inches(-0.12)
+                        if isinstance(topic, dict):
+                            t_title = topic.get("title") or topic.get("text") or ""
+                            if t_title:
+                                if first_topic and not module_title:
+                                    p_t = p
+                                    first_topic = False
+                                else:
+                                    p_t = row_cells[0].add_paragraph()
+                                p_t.paragraph_format.space_before = Pt(0)
+                                p_t.paragraph_format.space_after = Pt(2)
+                                p_t.paragraph_format.line_spacing = 1.35
+                                p_t.paragraph_format.left_indent = Inches(0.12)
+                                p_t.paragraph_format.first_line_indent = Inches(-0.12)
 
-                        pPr_t = p_t._p.get_or_add_pPr()
-                        numPr_t = OxmlElement('w:numPr')
-                        ilvl_t = OxmlElement('w:ilvl')
-                        ilvl_t.set(qn('w:val'), '0')
-                        numId_t = OxmlElement('w:numId')
-                        numId_t.set(qn('w:val'), '1')
-                        numPr_t.append(ilvl_t)
-                        numPr_t.append(numId_t)
-                        pPr_t.append(numPr_t)
+                                pPr_t = p_t._p.get_or_add_pPr()
+                                numPr_t = OxmlElement('w:numPr')
+                                ilvl_t = OxmlElement('w:ilvl')
+                                ilvl_t.set(qn('w:val'), '0')
+                                numId_t = OxmlElement('w:numId')
+                                numId_t.set(qn('w:val'), '1')
+                                numPr_t.append(ilvl_t)
+                                numPr_t.append(numId_t)
+                                pPr_t.append(numPr_t)
 
-                        clean_t = topic.lstrip("• ").strip()
-                        run_t = p_t.add_run(clean_t)
-                        run_t.font.name = STRICT_FONT_NAME
-                        run_t.font.size = Pt(10)
+                                clean_t = clean_bullet_text(t_title)
+                                run_t = p_t.add_run(clean_t)
+                                run_t.font.name = STRICT_FONT_NAME
+                                run_t.font.size = Pt(10)
+
+                            sub_list = topic.get("sub_topics") or topic.get("sub_bullets") or []
+                            for sub_item in sub_list:
+                                p_sub = row_cells[0].add_paragraph()
+                                p_sub.paragraph_format.space_before = Pt(0)
+                                p_sub.paragraph_format.space_after = Pt(2)
+                                p_sub.paragraph_format.line_spacing = 1.35
+                                p_sub.paragraph_format.left_indent = Inches(0.28)
+                                p_sub.paragraph_format.first_line_indent = Inches(-0.12)
+
+                                pPr_sub = p_sub._p.get_or_add_pPr()
+                                numPr_sub = OxmlElement('w:numPr')
+                                ilvl_sub = OxmlElement('w:ilvl')
+                                ilvl_sub.set(qn('w:val'), '1')
+                                numId_sub = OxmlElement('w:numId')
+                                numId_sub.set(qn('w:val'), '1')
+                                numPr_sub.append(ilvl_sub)
+                                numPr_sub.append(numId_sub)
+                                pPr_sub.append(numPr_sub)
+
+                                clean_sub = clean_bullet_text(sub_item)
+                                run_sub = p_sub.add_run(clean_sub)
+                                run_sub.font.name = STRICT_FONT_NAME
+                                run_sub.font.size = Pt(10)
+
+                        elif isinstance(topic, str):
+                            if first_topic and not module_title:
+                                p_t = p
+                                first_topic = False
+                            else:
+                                p_t = row_cells[0].add_paragraph()
+                            p_t.paragraph_format.space_before = Pt(0)
+                            p_t.paragraph_format.space_after = Pt(2)
+                            p_t.paragraph_format.line_spacing = 1.35
+
+                            topic_str = str(topic or "")
+                            is_sub = topic_str.startswith("  ") or topic_str.startswith("\t") or topic_str.startswith(" -") or topic_str.startswith(" •") or topic_str.startswith("- ")
+                            p_t.paragraph_format.left_indent = Inches(0.28 if is_sub else 0.12)
+                            p_t.paragraph_format.first_line_indent = Inches(-0.12)
+
+                            pPr_t = p_t._p.get_or_add_pPr()
+                            numPr_t = OxmlElement('w:numPr')
+                            ilvl_t = OxmlElement('w:ilvl')
+                            ilvl_t.set(qn('w:val'), '1' if is_sub else '0')
+                            numId_t = OxmlElement('w:numId')
+                            numId_t.set(qn('w:val'), '1')
+                            numPr_t.append(ilvl_t)
+                            numPr_t.append(numId_t)
+                            pPr_t.append(numPr_t)
+
+                            clean_t = clean_bullet_text(topic)
+                            run_t = p_t.add_run(clean_t)
+                            run_t.font.name = STRICT_FONT_NAME
+                            run_t.font.size = Pt(10)
 
                     if item.get("workshop"):
                         p_w = row_cells[0].add_paragraph()
