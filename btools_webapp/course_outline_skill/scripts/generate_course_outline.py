@@ -367,6 +367,9 @@ def render_workshop_cell(cell, w_data):
             run_n.font.size = Pt(10)
 
 def generate_doc(data, output_path, template_path=None):
+    global _CURRENT_AI_MODEL
+    _CURRENT_AI_MODEL = data.get("_ai_model_used", "")
+    
     if not template_path or not os.path.exists(template_path):
         script_dir = os.path.dirname(os.path.abspath(__file__))
         rel_template = os.path.abspath(os.path.join(script_dir, "..", "templates", "template.docx"))
