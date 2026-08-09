@@ -168,7 +168,7 @@ def add_bullet_p(doc, text, font_size=10, bold=False, left_indent_in=0.5, hangin
     pPr = p._p.get_or_add_pPr()
     numPr = OxmlElement('w:numPr')
     ilvl = OxmlElement('w:ilvl')
-    ilvl.set(qn('w:val'), '0' if left_indent_in <= 0.5 else '1')
+    ilvl.set(qn('w:val'), '0')
     numId = OxmlElement('w:numId')
     numId.set(qn('w:val'), '1')
     numPr.append(ilvl)
@@ -301,7 +301,7 @@ def render_workshop_cell(cell, w_data):
             pPr = p_b._p.get_or_add_pPr()
             numPr = OxmlElement('w:numPr')
             ilvl = OxmlElement('w:ilvl')
-            ilvl.set(qn('w:val'), '1')
+            ilvl.set(qn('w:val'), '0')
             numId = OxmlElement('w:numId')
             numId.set(qn('w:val'), '1')
             numPr.append(ilvl)
@@ -318,16 +318,16 @@ def render_workshop_cell(cell, w_data):
         bullet_lines = lines[1:] if len(lines) > 1 else []
         
         if header_line.startswith("Workshop") or header_line.startswith("กิจกรรม"):
-            parts = header_line.split(":", 1)
-            if len(parts) == 2:
+            if ":" in header_line:
+                parts = header_line.split(":", 1)
                 bold_prefix = f"{parts[0].strip()}: "
                 desc_text = parts[1].strip()
             else:
-                bold_prefix = "Workshop : "
-                desc_text = header_line
+                bold_prefix = f"{header_line}: "
+                desc_text = ""
         else:
-            parts = header_line.split(":", 1)
-            if len(parts) == 2:
+            if ":" in header_line:
+                parts = header_line.split(":", 1)
                 bold_prefix = f"Workshop ({parts[0].strip()}): "
                 desc_text = parts[1].strip()
             else:
@@ -339,7 +339,7 @@ def render_workshop_cell(cell, w_data):
         run_b.font.size = Pt(10)
         run_b.bold = True
         
-        if desc_text and desc_text != header_line:
+        if desc_text:
             run_n = p_w.add_run(desc_text)
             run_n.font.name = STRICT_FONT_NAME
             run_n.font.size = Pt(10)
@@ -355,7 +355,7 @@ def render_workshop_cell(cell, w_data):
             pPr = p_b._p.get_or_add_pPr()
             numPr = OxmlElement('w:numPr')
             ilvl = OxmlElement('w:ilvl')
-            ilvl.set(qn('w:val'), '1')
+            ilvl.set(qn('w:val'), '0')
             numId = OxmlElement('w:numId')
             numId.set(qn('w:val'), '1')
             numPr.append(ilvl)
@@ -576,7 +576,7 @@ def generate_doc(data, output_path, template_path=None):
                                 pPr_sub = p_sub._p.get_or_add_pPr()
                                 numPr_sub = OxmlElement('w:numPr')
                                 ilvl_sub = OxmlElement('w:ilvl')
-                                ilvl_sub.set(qn('w:val'), '1')
+                                ilvl_sub.set(qn('w:val'), '0')
                                 numId_sub = OxmlElement('w:numId')
                                 numId_sub.set(qn('w:val'), '1')
                                 numPr_sub.append(ilvl_sub)
@@ -606,7 +606,7 @@ def generate_doc(data, output_path, template_path=None):
                             pPr_t = p_t._p.get_or_add_pPr()
                             numPr_t = OxmlElement('w:numPr')
                             ilvl_t = OxmlElement('w:ilvl')
-                            ilvl_t.set(qn('w:val'), '1' if is_sub else '0')
+                            ilvl_t.set(qn('w:val'), '0')
                             numId_t = OxmlElement('w:numId')
                             numId_t.set(qn('w:val'), '1')
                             numPr_t.append(ilvl_t)
@@ -705,7 +705,7 @@ def generate_doc(data, output_path, template_path=None):
                                 pPr_sub = p_sub._p.get_or_add_pPr()
                                 numPr_sub = OxmlElement('w:numPr')
                                 ilvl_sub = OxmlElement('w:ilvl')
-                                ilvl_sub.set(qn('w:val'), '1')
+                                ilvl_sub.set(qn('w:val'), '0')
                                 numId_sub = OxmlElement('w:numId')
                                 numId_sub.set(qn('w:val'), '1')
                                 numPr_sub.append(ilvl_sub)
@@ -735,7 +735,7 @@ def generate_doc(data, output_path, template_path=None):
                             pPr_t = p_t._p.get_or_add_pPr()
                             numPr_t = OxmlElement('w:numPr')
                             ilvl_t = OxmlElement('w:ilvl')
-                            ilvl_t.set(qn('w:val'), '1' if is_sub else '0')
+                            ilvl_t.set(qn('w:val'), '0')
                             numId_t = OxmlElement('w:numId')
                             numId_t.set(qn('w:val'), '1')
                             numPr_t.append(ilvl_t)
