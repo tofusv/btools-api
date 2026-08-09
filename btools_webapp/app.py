@@ -38,13 +38,9 @@ def get_template_docx_path():
 
 def call_gemini_api(raw_text: str, api_key: str) -> dict:
     models_to_try = [
-        "gemini-3.1-pro",
-        "gemini-3.0-pro",
         "gemini-3.6-flash",
         "gemini-3.5-flash",
-        "gemini-3.0-flash",
-        "gemini-2.5-pro",
-        "gemini-1.5-pro"
+        "gemini-3.1-pro"
     ]
     
     prompt = """
@@ -110,29 +106,27 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
             }
         }
         
-        try:
-            print(f"กำลังส่งข้อมูลหา {model}...")
-            response = requests.post(url, json=payload, timeout=30)
-            
-            if response.status_code == 429:
-                print(f"ติด Rate Limit สำหรับ {model} รอ 8 วินาที...")
-                time.sleep(8)
+        for attempt in range(3): # รอและลองใหม่สูงสุด 3 ครั้งต่อโมเดล
+            try:
+                print(f"กำลังส่งข้อมูลหา {model} (ครั้งที่ {attempt+1})...")
                 response = requests.post(url, json=payload, timeout=30)
                 
-            if response.status_code == 200:
-                data = response.json()
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                parsed_data = json.loads(text)
-                parsed_data["_ai_model_used"] = model  # Inject the model name
-                return parsed_data
-            else:
-                error_msg = response.text
-                print(f"เกิดข้อผิดพลาดกับ {model}: {response.status_code} - {error_msg}")
-                last_error = f"{model} failed: {response.status_code}"
-                
-        except Exception as e:
-            print(f"Exception with {model}: {e}")
-            last_error = str(e)
+                if response.status_code == 200:
+                    data = response.json()
+                    text_out = data["candidates"][0]["content"]["parts"][0]["text"]
+                    parsed_data = json.loads(text_out)
+                    parsed_data["_ai_model_used"] = model  # Inject the model name
+                    return parsed_data
+                else:
+                    error_msg = response.text
+                    print(f"เกิดข้อผิดพลาดกับ {model} ({response.status_code}): รอ 8 วินาทีแล้วลองใหม่... - {error_msg}")
+                    last_error = f"{model} failed: {response.status_code}"
+                    time.sleep(8) # รอ 8 วินาทีตามที่ตกลงกันไว้
+                    
+            except Exception as e:
+                print(f"Exception with {model}: {e}")
+                last_error = str(e)
+                time.sleep(8)
             
     raise ValueError(f"ไม่สามารถประมวลผลด้วย Gemini API ได้ครบทุกโมเดล: {last_error}")
 
