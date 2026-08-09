@@ -38,9 +38,9 @@ def get_template_docx_path():
 
 def call_gemini_api(raw_text: str, api_key: str) -> dict:
     models_to_try = [
+        "gemini-3.1-pro",
         "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3.1-pro"
+        "gemini-3.5-flash"
     ]
     
     prompt = """
@@ -238,7 +238,9 @@ def format_course(doc_url: str = Form(...)):
         title_clean = re.sub(r'\s+', ' ', title_clean)
         if not title_clean:
             title_clean = "Course Outline"
-        filename = f"B Tools_{title_clean}.docx"
+            
+        ai_model_used = data.get("_ai_model_used", "gemini-unknown")
+        filename = f"B Tools_{title_clean} ({ai_model_used}).docx"
         
         tmp_dir = tempfile.mkdtemp()
         output_filepath = os.path.join(tmp_dir, filename)
