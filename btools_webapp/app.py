@@ -50,7 +50,7 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
       "course_title_en": "ชื่อหลักสูตรภาษาอังกฤษ",
       "instructor": "ชื่อวิทยากร (ถ้ามี)",
       "duration_info": "รายละเอียดความยาวหลักสูตร เช่น 1 วัน (09.00-16.00 น.)",
-      "sections_order": ["rationale", "objectives", "agenda", "learning_methods", "workshop_activities", "target_audience", "duration", "equipment", "expected_outcomes"],
+      "sections_order": ["rationale", "objectives", "agenda", "learning_methods", "workshop_activities", "target_audience", "duration", "equipment", "additional_sections", "expected_outcomes"],
       "rationale": [{"text": "ย่อหน้าบรรยาย"}, {"bullets": ["ข้อย่อย 1", "ข้อย่อย 2"]}],
       "objectives": [
         {
@@ -89,12 +89,20 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
       "workshop_activities": [
         {
           "title": "ชื่อกิจกรรม Workshop",
-          "description": "เนื้อหาหรือข้อย่อย (ถ้ามีข้อย่อยให้ใส่ \n ขึ้นบรรทัดใหม่รวมมาในนี้เลย)"
+          "description": "ย่อหน้าบรรยาย (ถ้ามี)",
+          "bullets": ["ข้อย่อย 1", "ข้อย่อย 2"]
         }
       ],
       "target_audience": ["กลุ่มเป้าหมาย 1"],
       "duration": ["ระยะเวลา 1 วัน (ถ้ามีเขียนแยกไว้)"],
-      "equipment": ["อุปกรณ์ที่ต้องเตรียม (ถ้ามี)"]
+      "equipment": ["อุปกรณ์ที่ต้องเตรียม (ถ้ามี)"],
+      "additional_sections": [
+        {
+          "title": "ชื่อหัวข้ออื่นๆ ที่อยู่นอกเหนือจากหมวดหลัก (จับยัดมาไว้ในนี้ให้หมด ห้ามทิ้ง!)",
+          "description": "เนื้อหาบรรยาย (ถ้ามี)",
+          "bullets": ["ข้อย่อย 1", "ข้อย่อย 2"]
+        }
+      ]
     }
     
     กฎเหล็กในการแยกโครงสร้างเนื้อหา (Strict Formatting Rules - MUST FOLLOW):
