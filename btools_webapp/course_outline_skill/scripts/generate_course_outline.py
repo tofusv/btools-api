@@ -322,23 +322,97 @@ def generate_doc(data, output_path, template_path=None):
         run.font.size = Pt(13)
         run.bold = True
 
-    if data.get("instructor"):
-        p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(0)
-        p.paragraph_format.space_after = Pt(4)
-        p.paragraph_format.line_spacing = 1.5
-        run = p.add_run(f"โดย {data['instructor']}")
-        run.font.name = STRICT_FONT_NAME
-        run.font.size = Pt(10)
-
-    if data.get("duration_info"):
-        p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(0)
-        p.paragraph_format.space_after = Pt(6)
-        p.paragraph_format.line_spacing = 1.35
-        run = p.add_run(data['duration_info'])
-        run.font.name = STRICT_FONT_NAME
-        run.font.size = Pt(10)
+def render_workshop_cell(cell, w_data):
+    if not w_data:
+        return
+    p_w = cell.add_paragraph()
+    p_w.paragraph_format.space_before = Pt(3)
+    p_w.paragraph_format.space_after = Pt(2)
+    p_w.paragraph_format.line_spacing = 1.35
+    
+    if isinstance(w_data, dict):
+        title = w_data.get("title") or "Workshop"
+        bullets = w_data.get("bullets") or w_data.get("topics") or []
+        run_b = p_w.add_run(f"Workshop ({title}): " if not title.startswith("Workshop") else f"{title}: ")
+        run_b.font.name = STRICT_FONT_NAME
+        run_b.font.size = Pt(10)
+        run_b.bold = True
+        
+        for b_item in bullets:
+            p_b = cell.add_paragraph()
+            p_b.paragraph_format.space_before = Pt(0)
+            p_b.paragraph_format.space_after = Pt(2)
+            p_b.paragraph_format.line_spacing = 1.35
+            p_b.paragraph_format.left_indent = Inches(0.28)
+            p_b.paragraph_format.first_line_indent = Inches(-0.12)
+            
+            pPr = p_b._p.get_or_add_pPr()
+            numPr = OxmlElement('w:numPr')
+            ilvl = OxmlElement('w:ilvl')
+            ilvl.set(qn('w:val'), '1')
+            numId = OxmlElement('w:numId')
+            numId.set(qn('w:val'), '1')
+            numPr.append(ilvl)
+            numPr.append(numId)
+            pPr.append(numPr)
+            
+            run_n = p_b.add_run(clean_bullet_text(b_item))
+            run_n.font.name = STRICT_FONT_NAME
+            run_n.font.size = Pt(10)
+    else:
+        w_text = str(w_data).strip()
+        lines = [line.strip() for line in w_text.split('\n') if line.strip()]
+        header_line = lines[0] if lines else w_text
+        bullet_lines = lines[1:] if len(lines) > 1 else []
+        
+        if header_line.startswith("Workshop") or header_line.startswith("กิจกรรม"):
+            parts = header_line.split(":", 1)
+            if len(parts) == 2:
+                bold_prefix = f"{parts[0].strip()}: "
+                desc_text = parts[1].strip()
+            else:
+                bold_prefix = "Workshop : "
+                desc_text = header_line
+        else:
+            parts = header_line.split(":", 1)
+            if len(parts) == 2:
+                bold_prefix = f"Workshop ({parts[0].strip()}): "
+                desc_text = parts[1].strip()
+            else:
+                bold_prefix = "Workshop : "
+                desc_text = header_line
+                
+        run_b = p_w.add_run(bold_prefix)
+        run_b.font.name = STRICT_FONT_NAME
+        run_b.font.size = Pt(10)
+        run_b.bold = True
+        
+        if desc_text and desc_text != header_line:
+            run_n = p_w.add_run(desc_text)
+            run_n.font.name = STRICT_FONT_NAME
+            run_n.font.size = Pt(10)
+            
+        for b_item in bullet_lines:
+            p_b = cell.add_paragraph()
+            p_b.paragraph_format.space_before = Pt(0)
+            p_b.paragraph_format.space_after = Pt(2)
+            p_b.paragraph_format.line_spacing = 1.35
+            p_b.paragraph_format.left_indent = Inches(0.28)
+            p_b.paragraph_format.first_line_indent = Inches(-0.12)
+            
+            pPr = p_b._p.get_or_add_pPr()
+            numPr = OxmlElement('w:numPr')
+            ilvl = OxmlElement('w:ilvl')
+            ilvl.set(qn('w:val'), '1')
+            numId = OxmlElement('w:numId')
+            numId.set(qn('w:val'), '1')
+            numPr.append(ilvl)
+            numPr.append(numId)
+            pPr.append(numPr)
+            
+            run_n = p_b.add_run(clean_bullet_text(b_item))
+            run_n.font.name = STRICT_FONT_NAME
+            run_n.font.size = Pt(10)
 
     add_blank_line(doc)
 
@@ -377,14 +451,10 @@ def generate_doc(data, output_path, template_path=None):
                 if isinstance(item, dict):
                     t_title = item.get("title") or item.get("text") or ""
                     if t_title:
-                        if is_intro_sentence(t_title):
-                            add_subhead_p(doc, t_title)
-                        else:
-                            add_bullet_p(doc, t_title, left_indent_in=0.5, hanging_in=0.25)
+                        add_subhead_p(doc, t_title)
                     sub_list = item.get("sub_bullets") or item.get("bullets") or []
                     for sub in sub_list:
-                        sub_indent = 0.5 if (t_title and is_intro_sentence(t_title)) else 0.75
-                        add_bullet_p(doc, sub, left_indent_in=sub_indent, hanging_in=0.25)
+                        add_bullet_p(doc, sub, left_indent_in=0.5, hanging_in=0.25)
                 elif isinstance(item, str):
                     if is_intro_sentence(item):
                         add_subhead_p(doc, item)
@@ -547,38 +617,7 @@ def generate_doc(data, output_path, template_path=None):
                             run_t.font.size = Pt(10)
 
                     if item.get("workshop"):
-                        p_w = row_cells[1].add_paragraph()
-                        p_w.paragraph_format.space_before = Pt(3)
-                        p_w.paragraph_format.space_after = Pt(2)
-                        p_w.paragraph_format.line_spacing = 1.35
-                        w_text = item['workshop']
-
-                        if w_text.startswith("Workshop") or w_text.startswith("กิจกรรม"):
-                            parts = w_text.split(":", 1)
-                            if len(parts) == 2:
-                                bold_prefix = f"{parts[0].strip()}: "
-                                desc_text = parts[1].strip()
-                            else:
-                                bold_prefix = "Workshop : "
-                                desc_text = w_text
-                        else:
-                            parts = w_text.split(":", 1)
-                            if len(parts) == 2:
-                                bold_prefix = f"Workshop ({parts[0].strip()}): "
-                                desc_text = parts[1].strip()
-                            else:
-                                bold_prefix = "Workshop : "
-                                desc_text = w_text
-
-                        run_b = p_w.add_run(bold_prefix)
-                        run_b.font.name = STRICT_FONT_NAME
-                        run_b.font.size = Pt(10)
-                        run_b.bold = True
-
-                        run_n = p_w.add_run(desc_text)
-                        run_n.font.name = STRICT_FONT_NAME
-                        run_n.font.size = Pt(10)
-                        run_n.bold = False
+                        render_workshop_cell(row_cells[1], item.get("workshop"))
 
                     set_cell_margins(row_cells[1], top=120, bottom=120, left=180, right=180)
 
@@ -707,38 +746,7 @@ def generate_doc(data, output_path, template_path=None):
                             run_t.font.size = Pt(10)
 
                     if item.get("workshop"):
-                        p_w = row_cells[0].add_paragraph()
-                        p_w.paragraph_format.space_before = Pt(3)
-                        p_w.paragraph_format.space_after = Pt(2)
-                        p_w.paragraph_format.line_spacing = 1.35
-                        w_text = item['workshop']
-
-                        if w_text.startswith("Workshop") or w_text.startswith("กิจกรรม"):
-                            parts = w_text.split(":", 1)
-                            if len(parts) == 2:
-                                bold_prefix = f"{parts[0].strip()}: "
-                                desc_text = parts[1].strip()
-                            else:
-                                bold_prefix = "Workshop : "
-                                desc_text = w_text
-                        else:
-                            parts = w_text.split(":", 1)
-                            if len(parts) == 2:
-                                bold_prefix = f"Workshop ({parts[0].strip()}): "
-                                desc_text = parts[1].strip()
-                            else:
-                                bold_prefix = "Workshop : "
-                                desc_text = w_text
-
-                        run_b = p_w.add_run(bold_prefix)
-                        run_b.font.name = STRICT_FONT_NAME
-                        run_b.font.size = Pt(10)
-                        run_b.bold = True
-
-                        run_n = p_w.add_run(desc_text)
-                        run_n.font.name = STRICT_FONT_NAME
-                        run_n.font.size = Pt(10)
-                        run_n.bold = False
+                        render_workshop_cell(row_cells[0], item.get("workshop"))
 
                     set_cell_margins(row_cells[0], top=120, bottom=120, left=180, right=180)
 
