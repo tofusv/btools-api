@@ -156,6 +156,12 @@ def format_course_text(req: FormatTextRequest):
         
         generate_doc(data, output_filepath, template_path=template_docx)
         
+        if not os.path.exists(output_filepath):
+            raise RuntimeError(f"FATAL: generate_doc finished but {output_filepath} DOES NOT EXIST on disk!")
+            
+        file_size = os.path.getsize(output_filepath)
+        print(f"✅ Document generated successfully: {output_filepath} (Size: {file_size} bytes)")
+        
         encoded_filename = urllib.parse.quote(filename)
         headers = {
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
@@ -224,6 +230,12 @@ def format_course(doc_url: str = Form(...)):
         template_docx = get_template_docx_path()
         
         generate_doc(data, output_filepath, template_path=template_docx)
+        
+        if not os.path.exists(output_filepath):
+            raise RuntimeError(f"FATAL: generate_doc finished but {output_filepath} DOES NOT EXIST on disk!")
+            
+        file_size = os.path.getsize(output_filepath)
+        print(f"✅ Document generated successfully: {output_filepath} (Size: {file_size} bytes)")
         
         encoded_filename = urllib.parse.quote(filename)
         headers = {
