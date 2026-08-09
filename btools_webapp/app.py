@@ -50,7 +50,7 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
       "course_title_en": "ชื่อหลักสูตรภาษาอังกฤษ",
       "instructor": "ชื่อวิทยากร (ถ้ามี)",
       "duration_info": "รายละเอียดความยาวหลักสูตร เช่น 1 วัน (09.00-16.00 น.)",
-      "sections_order": ["rationale", "objectives", "expected_outcomes", "agenda", "learning_methods", "target_audience", "duration", "equipment"],
+      "sections_order": ["rationale", "objectives", "agenda", "learning_methods", "target_audience", "duration", "equipment", "expected_outcomes"],
       "rationale": [{"text": "ย่อหน้าบรรยาย"}, {"bullets": ["ข้อย่อย 1", "ข้อย่อย 2"]}],
       "objectives": [
         {
@@ -60,7 +60,14 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
           ]
         }
       ],
-      "expected_outcomes": ["สิ่งที่จะได้รับ 1", "สิ่งที่จะได้รับ 2"],
+      "expected_outcomes": [
+        {
+          "title": "หัวข้อรอง H3 (ถ้ามี)",
+          "sub_bullets": [
+            "ข้อย่อย H4"
+          ]
+        }
+      ],
       "agenda": [
         {
           "time": "09.00 - 10.30 น.",
