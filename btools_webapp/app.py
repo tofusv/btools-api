@@ -1,11 +1,15 @@
 import os
 import re
 import sys
+import json
+import time
 import tempfile
 import urllib.parse
 import requests
 from fastapi import FastAPI, Form, Request, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
+from pydantic import BaseModel
+from typing import Optional
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
@@ -32,139 +36,120 @@ def get_template_docx_path():
             return path
     return None
 
-def extract_doc_id(url: str) -> str:
-    match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
-    if match:
-        return match.group(1)
-    raise ValueError("ไม่พบ ID ของ Google Doc ในลิงก์ที่ระบุ กรุณาตรวจสอบลิงก์อีกครั้ง")
-
-def fetch_doc_text(doc_id: str) -> str:
-    export_url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
-    resp = requests.get(export_url, timeout=15, allow_redirects=True)
-    if resp.status_code != 200:
-        raise ValueError(f"ไม่สามารถเข้าถึง Google Doc ได้ (HTTP Status {resp.status_code}) กรุณาตรวจสอบว่าเปิดสิทธิ์การเข้าถึงเป็น 'ทุกคนที่มีลิงก์' (Anyone with the link)")
+def call_gemini_api(raw_text: str, api_key: str) -> dict:
+    models_to_try = [
+        "gemini-2.0-flash-exp",
+        "gemini-2.5-flash",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash-8b"
+    ]
     
-    text = resp.text
-    if "<html" in text.lower() or "accounts.google.com" in resp.url.lower():
-        raise ValueError("Google Doc นี้ยังไม่ได้เปิดสิทธิ์การเข้าถึงเป็น 'ทุกคนที่มีลิงก์' (Anyone with the link) กรุณาเปิดสิทธิ์แชร์ใน Google Doc แล้วลองใหม่อีกครั้ง")
-    
-    return text
-
-def parse_doc_text_to_json(raw_text: str) -> dict:
-    cleaned_text = raw_text.replace('\ufeff', '')
-    lines = [line.strip() for line in cleaned_text.splitlines() if line.strip() and not line.strip().startswith('___')]
-    
-    data = {
-        'course_title_th': '',
-        'course_title_en': '',
-        'sections_order': [],
-        'rationale': [],
-        'objectives': [],
-        'agenda': [],
-        'learning_methods': [],
-        'expected_outcomes': [],
-        'target_audience': [],
-        'duration': []
+    prompt = """
+    วิเคราะห์และแยกโครงสร้างข้อมูลหลักสูตร (Course Outline) จากข้อความต่อไปนี้ให้อยู่ในรูปแบบ JSON ที่มีโครงสร้างดังนี้:
+    {
+      "course_title_th": "ชื่อหลักสูตรภาษาไทย (ตัดคำว่า หลักสูตร ออก)",
+      "course_title_en": "ชื่อหลักสูตรภาษาอังกฤษ",
+      "instructor": "ชื่อวิทยากร (ถ้ามี)",
+      "duration_info": "รายละเอียดความยาวหลักสูตร เช่น 1 วัน (09.00-16.00 น.)",
+      "sections_order": ["rationale", "objectives", "agenda", "learning_methods", "target_audience"],
+      "rationale": [{"text": "ย่อหน้าบรรยาย"}, {"bullets": ["ข้อย่อย 1", "ข้อย่อย 2"]}],
+      "objectives": [{"title": "ข้อหลัก", "sub_bullets": ["ข้อย่อย"]}],
+      "agenda": [
+        {
+          "time": "09.00 - 10.30 น.",
+          "module_title": "ชื่อหัวข้อหลัก (ถ้ามี)",
+          "topics": ["หัวข้อย่อย 1", "หัวข้อย่อย 2"],
+          "workshop": "รายละเอียด Workshop (ถ้ามี)"
+        }
+      ],
+      "learning_methods": ["รูปแบบ 1", "รูปแบบ 2"],
+      "target_audience": ["กลุ่มเป้าหมาย 1"]
     }
     
-    if not lines:
-        return data
-
-    title_line = lines[0].replace('หลักสูตร', '').replace(':', '').strip()
-    if re.search(r'[a-zA-Z]', title_line) and not re.search(r'[\u0E00-\u0E7F]', title_line):
-        data['course_title_en'] = title_line
-    else:
-        data['course_title_th'] = title_line
-
-    idx = 1
-    if len(lines) > 1 and re.search(r'[a-zA-Z]', lines[1]) and not any(k in lines[1] for k in ['หลักการ', 'วัตถุประสงค์', 'วิทยากร']):
-        if not data['course_title_en']:
-            data['course_title_en'] = lines[1].strip()
-            idx = 2
-
-    while idx < len(lines) and (lines[idx].startswith('วิทยากร') or lines[idx].startswith('โดย') or lines[idx].startswith('____')):
-        if lines[idx].startswith('วิทยากร') or lines[idx].startswith('โดย'):
-            data['instructor'] = lines[idx].replace('วิทยากร :', '').replace('วิทยากร:', '').replace('โดย', '').strip()
-        idx += 1
-
-    section_keywords = [
-        ('rationale', ['หลักการและเหตุผล', 'หลักการ และเหตุผล', 'Principle']),
-        ('objectives', ['วัตถุประสงค์', 'Objective']),
-        ('agenda', ['กำหนดการอบรม', 'เนื้อหาของหลักสูตร', 'Course Outline', 'Agenda', 'เวลา']),
-        ('learning_methods', ['รูปแบบการเรียนรู้', 'รูปแบบการอบรม', 'Learning Method']),
-        ('expected_outcomes', ['ผลลัพธ์ที่คาดหวัง', 'สิ่งที่จะได้รับ', 'Expected Outcome']),
-        ('target_audience', ['กลุ่มเป้าหมาย', 'Target Group', 'Target Audience']),
-        ('duration', ['ระยะเวลา', 'Course Length', 'Duration'])
-    ]
-
-    sec_order = []
-    current_sec = None
+    ข้อควรระวัง:
+    - ถ้าไม่มีหัวข้อไหนในต้นฉบับ ไม่ต้องใส่มา
+    - อย่าเติมแต่งข้อความที่ไม่มีในต้นฉบับ
+    - รูปแบบผลลัพธ์ต้องเป็น JSON ที่ valid เท่านั้น
     
-    for line in lines[idx:]:
-        matched_sec = None
-        matched_title = None
+    ข้อความต้นฉบับ:
+    """ + raw_text
+
+    last_error = None
+    
+    for model in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": 0.1
+            }
+        }
         
-        for sec_key, keywords in section_keywords:
-            if any(kw in line for kw in keywords):
-                matched_sec = sec_key
-                matched_title = line
-                break
+        try:
+            print(f"กำลังส่งข้อมูลหา {model}...")
+            response = requests.post(url, json=payload, timeout=30)
+            
+            if response.status_code == 429:
+                print(f"ติด Rate Limit สำหรับ {model} รอ 8 วินาที...")
+                time.sleep(8)
+                response = requests.post(url, json=payload, timeout=30)
                 
-        if matched_sec:
-            current_sec = matched_sec
-            if current_sec not in sec_order:
-                sec_order.append(current_sec)
-            data[f'{current_sec}_title'] = matched_title
-            continue
+            if response.status_code == 200:
+                data = response.json()
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                return json.loads(text)
+            else:
+                error_msg = response.text
+                print(f"เกิดข้อผิดพลาดกับ {model}: {response.status_code} - {error_msg}")
+                last_error = f"{model} failed: {response.status_code}"
+                
+        except Exception as e:
+            print(f"Exception with {model}: {e}")
+            last_error = str(e)
+            
+    raise ValueError(f"ไม่สามารถประมวลผลด้วย Gemini API ได้ครบทุกโมเดล: {last_error}")
 
-        if current_sec:
-            if current_sec == 'rationale':
-                if line.startswith('*') or line.startswith('•') or line.startswith('-'):
-                    if data['rationale'] and isinstance(data['rationale'][-1], dict):
-                        data['rationale'][-1].setdefault('bullets', []).append(line.lstrip('*•- ').strip())
-                    else:
-                        data['rationale'].append({'text': '', 'bullets': [line.lstrip('*•- ').strip()]})
-                else:
-                    data['rationale'].append({'text': line})
-                    
-            elif current_sec == 'objectives':
-                if line.startswith('เมื่อจบ') or line.startswith('หลังจากการอบรม'):
-                    data['objectives_subhead'] = line
-                else:
-                    clean_b = re.sub(r'^[\*•\-\d\.]+\s*', '', line).strip()
-                    if clean_b:
-                        data['objectives'].append(clean_b)
-                        
-            elif current_sec == 'agenda':
-                time_match = re.search(r'(\d{1,2}\.\d{2}\s*[\–\-]\s*\d{1,2}\.\d{2})', line)
-                if time_match:
-                    t_str = time_match.group(1).replace('–', '-').strip()
-                    if 'น.' not in t_str: t_str += ' น.'
-                    data['agenda'].append({'time': t_str, 'module_title': '', 'topics': []})
-                else:
-                    if not data['agenda']:
-                        data['agenda'].append({'module_title': line, 'topics': []})
-                    else:
-                        last_item = data['agenda'][-1]
-                        if line.startswith('Module') or line.startswith('Part') or line.startswith('ส่วนที่') or line.startswith('หัวข้อ'):
-                            if not last_item['module_title']:
-                                last_item['module_title'] = line
-                            else:
-                                data['agenda'].append({'module_title': line, 'topics': []})
-                        elif line.startswith('Workshop') or line.startswith('กิจกรรม'):
-                            last_item['workshop'] = line
-                        else:
-                            clean_t = line.lstrip('*•- ').strip()
-                            if clean_t:
-                                last_item.setdefault('topics', []).append(clean_t)
+class FormatTextRequest(BaseModel):
+    raw_text: str
+    api_key: Optional[str] = None
 
-            elif current_sec in ['learning_methods', 'expected_outcomes', 'target_audience', 'duration']:
-                clean_item = re.sub(r'^[\*•\-\d\.]+\s*', '', line).strip()
-                if clean_item:
-                    data[current_sec].append(clean_item)
-
-    data['sections_order'] = sec_order if sec_order else ['rationale', 'objectives', 'agenda']
-    return data
+@app.post("/api/format_text")
+def format_course_text(req: FormatTextRequest):
+    try:
+        if not req.raw_text.strip():
+            raise HTTPException(status_code=400, detail="raw_text is empty")
+            
+        api_key = req.api_key or os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=400, detail="Gemini API Key is required")
+            
+        data = call_gemini_api(req.raw_text, api_key)
+        
+        title = data.get("course_title_en") or data.get("course_title_th") or "Course Outline"
+        title_clean = title.replace(":", " -").replace("หลักสูตร", "").strip()
+        filename = f"B Tools_{title_clean}.docx"
+        
+        tmp_dir = tempfile.mkdtemp()
+        output_filepath = os.path.join(tmp_dir, filename)
+        template_docx = get_template_docx_path()
+        
+        generate_doc(data, output_filepath, template_path=template_docx)
+        
+        encoded_filename = urllib.parse.quote(filename)
+        headers = {
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+        }
+        return FileResponse(
+            path=output_filepath,
+            filename=filename,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers=headers
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
@@ -177,12 +162,35 @@ def index():
             return HTMLResponse(content=f.read())
     return HTMLResponse(content="<h1>B Tools Web App</h1><p>UI Template file not found.</p>")
 
+def extract_doc_id(url: str) -> str:
+    match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
+    if match:
+        return match.group(1)
+    raise ValueError("ไม่พบ ID ของ Google Doc ในลิงก์ที่ระบุ กรุณาตรวจสอบลิงก์อีกครั้ง")
+
+def fetch_doc_text(doc_id: str) -> str:
+    export_url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
+    resp = requests.get(export_url, timeout=15, allow_redirects=True)
+    if resp.status_code != 200:
+        raise ValueError(f"ไม่สามารถเข้าถึง Google Doc ได้ (HTTP Status {resp.status_code})")
+    
+    text = resp.text
+    if "<html" in text.lower() or "accounts.google.com" in resp.url.lower():
+        raise ValueError("Google Doc นี้ยังไม่ได้เปิดสิทธิ์การเข้าถึงเป็น 'ทุกคนที่มีลิงก์'")
+    
+    return text
+
 @app.post("/format")
 def format_course(doc_url: str = Form(...)):
     try:
         doc_id = extract_doc_id(doc_url)
         raw_text = fetch_doc_text(doc_id)
-        data = parse_doc_text_to_json(raw_text)
+        
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=400, detail="Gemini API Key is missing on the server")
+            
+        data = call_gemini_api(raw_text, api_key)
         
         title = data.get("course_title_en") or data.get("course_title_th") or "Course Outline"
         title_clean = title.replace(":", " -").replace("หลักสูตร", "").strip()
