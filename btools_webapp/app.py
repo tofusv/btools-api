@@ -167,6 +167,7 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
                             
                         parsed_data = json.loads(text_out)
                         parsed_data["_ai_model_used"] = model  # Inject the model name
+                        parsed_data["_keys_loaded"] = len(api_keys_list)
                         if model != models_to_try[0] and last_error:
                             parsed_data["_fallback_reason"] = last_error
                         return parsed_data
@@ -205,11 +206,17 @@ def format_course_text(req: FormatTextRequest):
         if not req.raw_text.strip():
             raise HTTPException(status_code=400, detail="raw_text is empty")
             
-        api_key = req.api_key or os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            raise HTTPException(status_code=400, detail="Gemini API Key is required")
+        # Merge API keys from request and environment variables
+        api_keys_str = ""
+        if req.api_key:
+            api_keys_str += req.api_key + ","
+        if os.getenv("GEMINI_API_KEY"):
+            api_keys_str += os.getenv("GEMINI_API_KEY")
             
-        data = call_gemini_api(req.raw_text, api_key)
+        if not api_keys_str.strip(", "):
+            raise HTTPException(status_code=400, detail="Missing API Key in both Request and Environment")
+
+        data = call_gemini_api(req.raw_text, api_keys_str)
         
         title = data.get("course_title_en") or data.get("course_title_th") or "Course Outline"
         title_clean = re.sub(r'[\r\n\t/\\:*?"<>|]', ' ', str(title)).replace("หลักสูตร", "").strip()
