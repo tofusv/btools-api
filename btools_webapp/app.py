@@ -144,7 +144,10 @@ def format_course_text(req: FormatTextRequest):
         data = call_gemini_api(req.raw_text, api_key)
         
         title = data.get("course_title_en") or data.get("course_title_th") or "Course Outline"
-        title_clean = title.replace(":", " -").replace("หลักสูตร", "").strip()
+        title_clean = re.sub(r'[\r\n\t/\\:*?"<>|]', ' ', str(title)).replace("หลักสูตร", "").strip()
+        title_clean = re.sub(r'\s+', ' ', title_clean)
+        if not title_clean:
+            title_clean = "Course Outline"
         filename = f"B Tools_{title_clean}.docx"
         
         tmp_dir = tempfile.mkdtemp()
@@ -210,7 +213,10 @@ def format_course(doc_url: str = Form(...)):
         data = call_gemini_api(raw_text, api_key)
         
         title = data.get("course_title_en") or data.get("course_title_th") or "Course Outline"
-        title_clean = title.replace(":", " -").replace("หลักสูตร", "").strip()
+        title_clean = re.sub(r'[\r\n\t/\\:*?"<>|]', ' ', str(title)).replace("หลักสูตร", "").strip()
+        title_clean = re.sub(r'\s+', ' ', title_clean)
+        if not title_clean:
+            title_clean = "Course Outline"
         filename = f"B Tools_{title_clean}.docx"
         
         tmp_dir = tempfile.mkdtemp()
