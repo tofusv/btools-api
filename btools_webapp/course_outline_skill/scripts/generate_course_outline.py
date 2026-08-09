@@ -22,6 +22,8 @@ def clean_bullet_text(text):
     # Strip alphabetical prefixes like "a. ", "b. ", "c. ", "a) ", "b) ", "(a) ", "A. ", "B. "
     txt = re.sub(r'^\(?[a-zA-Z]\)[\.\s]*', '', txt)
     txt = re.sub(r'^[a-zA-Z][\.\)]\s*', '', txt)
+    # Strip leading numbers like "1. ", "2. ", "1) "
+    txt = re.sub(r'^\d+[\.\)]\s*', '', txt)
     return txt.strip()
 
 DEFAULT_TEMPLATE = r"C:\Users\Sert-windows\.gemini\antigravity\scratch\skills\course_outline_generator\templates\template.docx"
