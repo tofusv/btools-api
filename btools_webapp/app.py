@@ -126,6 +126,8 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
                     text_out = data["candidates"][0]["content"]["parts"][0]["text"]
                     parsed_data = json.loads(text_out)
                     parsed_data["_ai_model_used"] = model  # Inject the model name
+                    if model != models_to_try[0] and last_error:
+                        parsed_data["_fallback_reason"] = last_error
                     return parsed_data
                 else:
                     error_msg = response.text
@@ -168,7 +170,13 @@ def format_course_text(req: FormatTextRequest):
             title_clean = "Course Outline"
             
         ai_model_used = data.get("_ai_model_used", "gemini-unknown")
-        filename = f"B Tools_{title_clean} ({ai_model_used}).docx"
+        fallback_reason = data.get("_fallback_reason", "")
+        if fallback_reason:
+            err_code = re.search(r'failed: (\d+)', fallback_reason)
+            err_code_str = err_code.group(1) if err_code else "ERR"
+            filename = f"B Tools_{title_clean} ({ai_model_used} x {err_code_str}).docx"
+        else:
+            filename = f"B Tools_{title_clean} ({ai_model_used}).docx"
         
         tmp_dir = tempfile.mkdtemp()
         output_filepath = os.path.join(tmp_dir, filename)
@@ -245,7 +253,13 @@ def format_course(doc_url: str = Form(...)):
             title_clean = "Course Outline"
             
         ai_model_used = data.get("_ai_model_used", "gemini-unknown")
-        filename = f"B Tools_{title_clean} ({ai_model_used}).docx"
+        fallback_reason = data.get("_fallback_reason", "")
+        if fallback_reason:
+            err_code = re.search(r'failed: (\d+)', fallback_reason)
+            err_code_str = err_code.group(1) if err_code else "ERR"
+            filename = f"B Tools_{title_clean} ({ai_model_used} x {err_code_str}).docx"
+        else:
+            filename = f"B Tools_{title_clean} ({ai_model_used}).docx"
         
         tmp_dir = tempfile.mkdtemp()
         output_filepath = os.path.join(tmp_dir, filename)
