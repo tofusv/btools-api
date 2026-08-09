@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>B Tools - ระบบจัดหน้าเอกสารหลักสูตรอัตโนมัติ</title>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-gradient: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --primary: #38bdf8;
+            --primary-hover: #0284c7;
+            --accent: #f59e0b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Sarabun', sans-serif;
+        }
+
+        body {
+            background: var(--bg-gradient);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 650px;
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--border-color);
+            border-radius: 24px;
+            padding: 40px 32px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            text-align: center;
+        }
+
+        .logo-badge {
+            display: inline-block;
+            background: rgba(56, 189, 248, 0.1);
+            color: var(--primary);
+            font-weight: 700;
+            font-size: 14px;
+            padding: 6px 16px;
+            border-radius: 20px;
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            margin-bottom: 16px;
+            letter-spacing: 1px;
+        }
+
+        h1 {
+            font-size: 26px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            background: linear-gradient(to right, #ffffff, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-bottom: 32px;
+            line-height: 1.6;
+        }
+
+        .input-group {
+            margin-bottom: 24px;
+            text-align: left;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        input[type="url"] {
+            width: 100%;
+            padding: 16px 20px;
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            color: var(--text-main);
+            font-size: 15px;
+            transition: all 0.3s ease;
+            outline: none;
+        }
+
+        input[type="url"]:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.15);
+        }
+
+        button.btn-submit {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, var(--primary) 0%, #0284c7 100%);
+            color: #ffffff;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 20px -5px rgba(2, 132, 199, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        button.btn-submit:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 25px -5px rgba(2, 132, 199, 0.5);
+        }
+
+        button.btn-submit:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 0.8s linear infinite;
+            display: none;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .status-card {
+            margin-top: 24px;
+            padding: 16px;
+            border-radius: 12px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .status-card.error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+        }
+
+        .status-card.success {
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            color: #86efac;
+        }
+
+        .features-list {
+            margin-top: 36px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border-color);
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            text-align: left;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .feature-item svg {
+            width: 16px;
+            height: 16px;
+            fill: var(--primary);
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo-badge">B TOOLS TRAINING</div>
+        <h1>ระบบจัดหน้าเอกสารหลักสูตรอัตโนมัติ</h1>
+        <p class="subtitle">วางลิงก์ Google Doc เพื่อแปลงเป็นไฟล์ Microsoft Word (.docx) ตามมาตรฐาน B Tools (ฟอนต์ Sarabun, ตารางพอดีขอบกระดาษ, เลขหน้าชิดขวาล่าง 100%)</p>
+
+        <form id="formatForm">
+            <div class="input-group">
+                <label for="doc_url">ลิงก์ Google Doc หลักสูตร</label>
+                <input type="url" id="doc_url" name="doc_url" placeholder="https://docs.google.com/document/d/..." required autocomplete="off">
+            </div>
+            <button type="submit" class="btn-submit" id="btnSubmit">
+                <span class="spinner" id="spinner"></span>
+                <span id="btnText">⚡ จัดหน้าและสร้างไฟล์ Word (.docx)</span>
+            </button>
+        </form>
+
+        <div class="status-card" id="statusCard"></div>
+
+        <div class="features-list">
+            <div class="feature-item">
+                <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                ฟอนต์ Sarabun 10/12/13pt
+            </div>
+            <div class="feature-item">
+                <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                ตารางพอดีขอบ 6.65 นิ้ว
+            </div>
+            <div class="feature-item">
+                <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                เลขหน้าชิดขวาล่างอัตโนมัติ
+            </div>
+            <div class="feature-item">
+                <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                ตั้งชื่อไฟล์ B Tools_[ชื่อ]
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('formatForm');
+        const btnSubmit = document.getElementById('btnSubmit');
+        const btnText = document.getElementById('btnText');
+        const spinner = document.getElementById('spinner');
+        const statusCard = document.getElementById('statusCard');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const urlInput = document.getElementById('doc_url').value.trim();
+
+            if (!urlInput) return;
+
+            // UI Loading state
+            btnSubmit.disabled = true;
+            spinner.style.display = 'block';
+            btnText.textContent = 'กำลังอ่านข้อมูลและจัดหน้าเอกสาร...';
+            statusCard.style.display = 'none';
+
+            try {
+                const formData = new FormData();
+                formData.append('doc_url', urlInput);
+
+                const response = await fetch('/format', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.detail || 'เกิดข้อผิดพลาดในการประมวลผล');
+                }
+
+                // Extract filename from Header or Content-Disposition
+                let filename = 'B Tools_Course_Outline.docx';
+                const disposition = response.headers.get('Content-Disposition');
+                if (disposition && disposition.indexOf('filename*=UTF-8\'\'') !== -1) {
+                    filename = decodeURIComponent(disposition.split('filename*=UTF-8\'\'')[1]);
+                }
+
+                const blob = await response.blob();
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(downloadUrl);
+
+                statusCard.className = 'status-card success';
+                statusCard.textContent = `✅ จัดหน้าและดาวน์โหลดไฟล์ "${filename}" สำเร็จเรียบร้อยแล้ว!`;
+                statusCard.style.display = 'block';
+
+            } catch (err) {
+                statusCard.className = 'status-card error';
+                statusCard.textContent = `❌ เกิดข้อผิดพลาด: ${err.message}`;
+                statusCard.style.display = 'block';
+            } finally {
+                btnSubmit.disabled = false;
+                spinner.style.display = 'none';
+                btnText.textContent = '⚡ จัดหน้าและสร้างไฟล์ Word (.docx)';
+            }
+        });
+    </script>
+</body>
+</html>
