@@ -38,7 +38,7 @@ def get_template_docx_path():
 
 def call_gemini_api(raw_text: str, api_key: str) -> dict:
     models_to_try = [
-        "gemini-3.1-pro",
+        "gemini-3.1-pro-preview",
         "gemini-3.6-flash",
         "gemini-3.5-flash"
     ]
@@ -129,9 +129,14 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
                     return parsed_data
                 else:
                     error_msg = response.text
-                    print(f"เกิดข้อผิดพลาดกับ {model} ({response.status_code}): รอ 8 วินาทีแล้วลองใหม่... - {error_msg}")
                     last_error = f"{model} failed: {response.status_code}"
-                    time.sleep(8) # รอ 8 วินาทีตามที่ตกลงกันไว้
+                    
+                    if response.status_code in (404, 403, 400):
+                        print(f"ข้าม {model} เนื่องจากไม่มีสิทธิ์ใช้งานหรือไม่มีโมเดลนี้ ({response.status_code})")
+                        break # ข้ามไปโมเดลถัดไปทันที ไม่ต้องรอ
+                        
+                    print(f"เกิดข้อผิดพลาดกับ {model} ({response.status_code}): รอ 8 วินาทีแล้วลองใหม่... - {error_msg}")
+                    time.sleep(8) # รอ 8 วินาทีเฉพาะตอนติด Rate Limit หรือ Server Error
                     
             except Exception as e:
                 print(f"Exception with {model}: {e}")
