@@ -180,6 +180,25 @@ def add_bullet_p(doc, text, font_size=10, bold=False, left_indent_in=0.5, hangin
     run.bold = bold
     return p
 
+def is_intro_sentence(text):
+    if not text or not isinstance(text, str):
+        return False
+    t = text.strip()
+    intro_keywords = ["เพื่อให้", "เมื่อจบ", "เมื่อสิ้นสุด", "วัตถุประสงค์", "ผู้เข้าอบรมจะสามารถ", "ผู้เข้าอบรมสามารถ"]
+    return any(kw in t for kw in intro_keywords) or t.endswith(":") or t.endswith("ดังนี้") or t.endswith("สามารถ")
+
+def add_subhead_p(doc, text, font_size=10, left_indent_in=0.5):
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(3)
+    p.paragraph_format.line_spacing = 1.35
+    p.paragraph_format.left_indent = Inches(left_indent_in)
+    run = p.add_run(text.strip())
+    run.font.name = STRICT_FONT_NAME
+    run.font.size = Pt(font_size)
+    run.bold = False
+    return p
+
 def fix_footer_page_number(doc):
     """จัดวางเลขหน้าใน Footer ให้อยู่ขวาล่างชิดขอบขวา อย่างสวยงาม ด้วย Right Tab Stop 6.92 in"""
     for sec in doc.sections:
@@ -346,24 +365,9 @@ def generate_doc(data, output_path, template_path=None):
                         add_blank_line(doc)
                     elif item.get("text"):
                         add_blank_line(doc)
-def is_intro_sentence(text):
-    if not text or not isinstance(text, str):
-        return False
-    t = text.strip()
-    intro_keywords = ["เพื่อให้", "เมื่อจบ", "เมื่อสิ้นสุด", "วัตถุประสงค์", "ผู้เข้าอบรมจะสามารถ", "ผู้เข้าอบรมสามารถ"]
-    return any(kw in t for kw in intro_keywords) or t.endswith(":") or t.endswith("ดังนี้") or t.endswith("สามารถ")
-
-def add_subhead_p(doc, text, font_size=10, left_indent_in=0.5):
-    p = doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(0)
-    p.paragraph_format.space_after = Pt(3)
-    p.paragraph_format.line_spacing = 1.35
-    p.paragraph_format.left_indent = Inches(left_indent_in)
-    run = p.add_run(text.strip())
-    run.font.name = STRICT_FONT_NAME
-    run.font.size = Pt(font_size)
-    run.bold = False
-    return p
+                elif isinstance(item, str):
+                    add_rationale_p(doc, item)
+                    add_blank_line(doc)
 
         elif sec_key == "objectives" and data.get("objectives"):
             add_heading(doc, data.get("objectives_title", "วัตถุประสงค์ของหลักสูตร"), font_size=12)
