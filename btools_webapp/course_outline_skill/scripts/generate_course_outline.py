@@ -854,7 +854,18 @@ def generate_doc(data, output_path, template_path=None):
                 add_blank_line(doc)
             elif isinstance(data["expected_outcomes"], list):
                 for item in data["expected_outcomes"]:
-                    add_bullet_p(doc, item)
+                    if isinstance(item, dict):
+                        t_title = item.get("title") or item.get("text") or ""
+                        if t_title:
+                            add_subhead_p(doc, t_title)
+                        sub_list = item.get("sub_bullets") or item.get("bullets") or []
+                        for sub in sub_list:
+                            add_bullet_p(doc, sub, left_indent_in=0.5, hanging_in=0.25)
+                    elif isinstance(item, str):
+                        if is_intro_sentence(item):
+                            add_subhead_p(doc, item)
+                        else:
+                            add_bullet_p(doc, item, left_indent_in=0.5, hanging_in=0.25)
                 add_blank_line(doc)
 
         elif sec_key == "remarks" and data.get("remarks"):
