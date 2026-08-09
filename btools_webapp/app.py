@@ -37,7 +37,7 @@ def get_template_docx_path():
     return None
 
 def call_gemini_api(raw_text: str, api_key: str) -> dict:
-        models_to_try = [
+    models_to_try = [
         "gemini-1.5-flash-latest",
         "gemini-1.5-flash-001",
         "gemini-1.5-flash",
