@@ -99,8 +99,10 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
     5. ตรวจสอบความซ้อนของหัวข้อใน Agenda อย่างละเอียดที่สุด:
        - หากมีหัวข้อหลักแล้วมีข้อย่อยซ้อนลงไปอีกชั้น (เช่น "ความคาดหวัง..." แล้วมีข้อย่อย "นิยาม..." และ "ผลกระทบ...") **ต้องจัดให้อยู่ในรูปแบบวัตถุ {"title": "ความคาดหวัง...", "sub_topics": ["นิยาม...", "ผลกระทบ..."]}** ห้ามดึงออกมาวางเป็นหัวข้อเรียงระนาบเดียวกันเด็ดขาด!
     6. รูปแบบผลลัพธ์ต้องเป็น JSON ที่ valid เท่านั้น
-    7. **คำเตือนระดับสูงสุดเรื่องความครบถ้วน (ZERO TRUNCATION):** ห้ามตัดหัวข้อใดๆ หรือข้อย่อยใดๆ ออกเด็ดขาด! ต้องดึงหัวข้อมาลงใน JSON ให้ครบทุกหัวข้อและทุกข้อย่อยแบบ 100% ตามต้นฉบับ หากต้นฉบับมี 20 ข้อ คุณต้องก๊อปปี้มาลงทั้ง 20 ข้อ ห้ามสรุปย่อ ห้ามละไว้ในฐานที่เข้าใจ การตัดหัวข้อทิ้งถือเป็นความล้มเหลวร้ายแรง!
-    8. **ห้ามแต่งเนื้อหาขึ้นมาเอง (NO HALLUCINATION):** อ้างอิงเฉพาะข้อความในต้นฉบับเท่านั้น ห้ามคิดหัวข้อใหม่ ห้ามแต่งเติมคำบรรยายที่ไม่มีในต้นฉบับขึ้นมาเองเด็ดขาด! หากหมวดไหนไม่มีข้อมูลในต้นฉบับ ให้ใส่เป็น Array ว่าง `[]`
+    
+    *** คำเตือนขั้นเด็ดขาด (CRITICAL INSTRUCTIONS) ***
+    - ZERO TRUNCATION: คุณต้องอ่านต้นฉบับตั้งแต่บรรทัดแรกจนบรรทัดสุดท้าย และคัดลอกหัวข้อ/ข้อย่อยมาใส่ใน JSON ให้ครบ 100% ห้ามย่อ ห้ามข้าม ห้ามละไว้ในฐานที่เข้าใจเด็ดขาด! การตัดหัวข้อทิ้งแม้แต่ข้อเดียวคือความผิดพลาดร้ายแรง!
+    - NO HALLUCINATION: ห้ามแต่งเติมเนื้อหาหรือคิดหัวข้อขึ้นมาเองเด็ดขาด ให้ดึงเฉพาะข้อความที่มีอยู่จริงในต้นฉบับเท่านั้น! หากหมวดใดไม่มีเนื้อหา ให้เว้นว่างเป็น Array ว่าง []
     
     ข้อความต้นฉบับ:
     """ + raw_text
@@ -118,18 +120,30 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
                     "responseMimeType": "application/json",
-                    "temperature": 0.0
+                    "temperature": 0.0,
+                    "maxOutputTokens": 8192
                 }
             }
             
             for attempt in range(2): # ลองใหม่สูงสุด 2 ครั้งต่อ Key
                 try:
                     print(f"กำลังส่งข้อมูลหา {model} (Key {key_idx+1}/{len(api_keys_list)} - ครั้งที่ {attempt+1})...")
-                    response = requests.post(url, json=payload, timeout=30)
+                    response = requests.post(url, json=payload, timeout=60)
                     
                     if response.status_code == 200:
                         data = response.json()
                         text_out = data["candidates"][0]["content"]["parts"][0]["text"]
+                        
+                        # ลบ Markdown backticks เผื่อ AI ตอบกลับมาพร้อมฟอร์แมต
+                        text_out = text_out.strip()
+                        if text_out.startswith("```json"):
+                            text_out = text_out[7:]
+                        elif text_out.startswith("```"):
+                            text_out = text_out[3:]
+                        if text_out.endswith("```"):
+                            text_out = text_out[:-3]
+                        text_out = text_out.strip()
+                            
                         parsed_data = json.loads(text_out)
                         parsed_data["_ai_model_used"] = model  # Inject the model name
                         if model != models_to_try[0] and last_error:
