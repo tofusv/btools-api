@@ -445,30 +445,49 @@ def render_dynamic_table(doc, table_data):
         hdr_cells = table.rows[0].cells
         for i, h_text in enumerate(headers):
             if i < len(hdr_cells):
-                hdr_cells[i].text = str(h_text)
+                hdr_cells[i].text = ""
                 set_cell_margins(hdr_cells[i], top=60, bottom=60, left=100, right=100)
-                for p in hdr_cells[i].paragraphs:
-                    p.paragraph_format.space_before = Pt(0)
-                    p.paragraph_format.space_after = Pt(0)
-                    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    for r in p.runs:
-                        r.font.name = STRICT_FONT_NAME
-                        r.font.size = Pt(10)
-                        r.bold = True
+                p = hdr_cells[i].paragraphs[0]
+                p.paragraph_format.space_before = Pt(0)
+                p.paragraph_format.space_after = Pt(0)
+                p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+                text_str = str(h_text).strip()
+                text_str = re.sub(r'^([^\*]+?):\*\*', r'**\1:**', text_str)
+                parts = re.split(r'(\*\*.*?\*\*)', text_str)
+                for part in parts:
+                    if not part: continue
+                    clean_part = part[2:-2] if (part.startswith('**') and part.endswith('**') and len(part) >= 4) else part
+                    run = p.add_run(clean_part)
+                    run.font.name = STRICT_FONT_NAME
+                    run.font.size = Pt(10)
+                    run.bold = True
                         
     for row_data in rows:
         row_cells = table.add_row().cells
         for i, r_text in enumerate(row_data):
             if i < len(row_cells):
-                row_cells[i].text = str(r_text)
+                row_cells[i].text = ""
                 set_cell_margins(row_cells[i], top=60, bottom=60, left=100, right=100)
-                for p in row_cells[i].paragraphs:
-                    p.paragraph_format.space_before = Pt(0)
-                    p.paragraph_format.space_after = Pt(0)
-                    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                    for r in p.runs:
-                        r.font.name = STRICT_FONT_NAME
-                        r.font.size = Pt(10)
+                p = row_cells[i].paragraphs[0]
+                p.paragraph_format.space_before = Pt(0)
+                p.paragraph_format.space_after = Pt(0)
+                p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                
+                text_str = str(r_text).strip()
+                text_str = re.sub(r'^([^\*]+?):\*\*', r'**\1:**', text_str)
+                parts = re.split(r'(\*\*.*?\*\*)', text_str)
+                for part in parts:
+                    if not part: continue
+                    if part.startswith('**') and part.endswith('**') and len(part) >= 4:
+                        run = p.add_run(part[2:-2])
+                        run.font.name = STRICT_FONT_NAME
+                        run.font.size = Pt(10)
+                        run.bold = True
+                    else:
+                        run = p.add_run(part)
+                        run.font.name = STRICT_FONT_NAME
+                        run.font.size = Pt(10)
                         
     apply_table_borders(table)
     add_blank_line(doc)
