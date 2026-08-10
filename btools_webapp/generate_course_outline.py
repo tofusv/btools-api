@@ -54,12 +54,13 @@ def add_smart_bullet(p, text, font_size=10, bold=False):
     for part in parts:
         if not part: continue
         if part.startswith('**') and part.endswith('**') and len(part) >= 4:
-            run = p.add_run(part[2:-2])
+            run = p.add_run(part.strip('*'))
             run.font.name = STRICT_FONT_NAME
             run.font.size = Pt(font_size)
             run.bold = True
         else:
-            run = p.add_run(part)
+            clean_part = part.replace('**', '')
+            run = p.add_run(clean_part)
             run.font.name = STRICT_FONT_NAME
             run.font.size = Pt(font_size)
             run.bold = bold
@@ -457,7 +458,7 @@ def render_dynamic_table(doc, table_data):
                 parts = re.split(r'(\*\*.*?\*\*)', text_str)
                 for part in parts:
                     if not part: continue
-                    clean_part = part[2:-2] if (part.startswith('**') and part.endswith('**') and len(part) >= 4) else part.replace('**', '')
+                    clean_part = part.strip('*') if (part.startswith('**') and part.endswith('**') and len(part) >= 4) else part.replace('**', '')
                     run = p.add_run(clean_part)
                     run.font.name = STRICT_FONT_NAME
                     run.font.size = Pt(10)
@@ -480,7 +481,7 @@ def render_dynamic_table(doc, table_data):
                 for part in parts:
                     if not part: continue
                     if part.startswith('**') and part.endswith('**') and len(part) >= 4:
-                        run = p.add_run(part[2:-2])
+                        run = p.add_run(part.strip('*'))
                         run.font.name = STRICT_FONT_NAME
                         run.font.size = Pt(10)
                         run.bold = True
