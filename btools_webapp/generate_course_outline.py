@@ -230,16 +230,31 @@ def is_intro_sentence(text):
     intro_keywords = ["เพื่อให้", "เมื่อจบ", "เมื่อสิ้นสุด", "วัตถุประสงค์", "ผู้เข้าอบรมจะสามารถ", "ผู้เข้าอบรมสามารถ"]
     return any(kw in t for kw in intro_keywords) or t.endswith(":") or t.endswith("ดังนี้") or t.endswith("สามารถ")
 
-def add_subhead_p(doc, text, font_size=10, left_indent_in=0.5):
+def add_subhead_p(doc, text, font_size=10, left_indent_in=0):
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(3)
     p.paragraph_format.line_spacing = 1.35
     p.paragraph_format.left_indent = Inches(left_indent_in)
-    run = p.add_run(text.strip())
-    run.font.name = STRICT_FONT_NAME
-    run.font.size = Pt(font_size)
-    run.bold = False
+    
+    text_str = str(text).strip()
+    # ซ่อมแซมกรณี AI ลืมใส่ ** ด้านหน้า (เช่น "Topic:**" -> "**Topic:**")
+    text_str = re.sub(r'^([^\*]+?):\*\*', r'**\1:**', text_str)
+    
+    parts = re.split(r'(\*\*.*?\*\*)', text_str)
+    for part in parts:
+        if not part: continue
+        if part.startswith('**') and part.endswith('**') and len(part) >= 4:
+            run = p.add_run(part[2:-2])
+            run.font.name = STRICT_FONT_NAME
+            run.font.size = Pt(font_size)
+            run.bold = True
+        else:
+            run = p.add_run(part)
+            run.font.name = STRICT_FONT_NAME
+            run.font.size = Pt(font_size)
+            # Default to Bold for subheads unless it's a mix. Actually, let's just make it bold if it's a subhead without any markdown, to match typical word formatting.
+            run.bold = True if len(parts) == 1 else False
     return p
 
 def fix_footer_page_number(doc):
