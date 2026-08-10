@@ -15,9 +15,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 try:
-    from course_outline_skill.scripts.generate_course_outline import generate_doc
+    from generate_course_outline import generate_doc
 except ImportError:
-    from scripts.generate_course_outline import generate_doc
+    from .generate_course_outline import generate_doc
 
 app = FastAPI(title="B Tools Course Outline Formatter", version="1.0.0")
 
