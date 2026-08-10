@@ -14,8 +14,10 @@ STRICT_FONT_NAME = "Sarabun"
 def clean_bullet_text(text):
     if text is None:
         return ""
+    if not isinstance(text, str):
+        text = str(text)
     # ไม่ลบสัญลักษณ์ใดๆ ทั้งสิ้น เพื่อคงรูปแบบดั้งเดิม (ตัวเลข, ขีด, ลูกศร) ตามที่ AI ส่งมา
-    return txt
+    return text.strip()
 
 DEFAULT_TEMPLATE = r"C:\Users\Sert-windows\.gemini\antigravity\scratch\skills\course_outline_generator\templates\template.docx"
 
