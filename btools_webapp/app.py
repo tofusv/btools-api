@@ -116,7 +116,22 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
           }
         }
       ]
-    }
+    },
+    "sections_order": [
+      "rationale",
+      "objectives",
+      "topics",
+      "agenda",
+      "learning_methods",
+      "target_audience",
+      "duration",
+      "equipment",
+      "workshop_activities",
+      "teaching_style",
+      "expected_outcomes",
+      "remarks",
+      "additional_sections"
+    ]
     
     กฎเหล็กในการแยกโครงสร้างเนื้อหา (Strict Formatting Rules - MUST FOLLOW):
     1. บทบาทของคุณคือ "ตัวแยกแยะข้อมูล" (Data Parser) หน้าที่ของคุณคือ **"คัดลอก (Copy) และ วาง (Paste)"** ข้อความจากต้นฉบับเป๊ะๆ ห้ามสรุปความ ห้ามตัดตอน ห้ามเรียบเรียงประโยคใหม่ และห้ามแต่งประโยคเติมเองเด็ดขาด! (อนุญาตให้แก้แค่คำผิด หรือเติมคำที่พิมพ์ตกหล่นให้สมบูรณ์เท่านั้น)
@@ -138,8 +153,9 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
     10. **หัวข้อย่อยในบรรทัดเดียวกัน:** คำที่ดูเหมือนหัวข้อก่อนเริ่มอธิบายเนื้อหาในบรรทัดเดียวกัน (เช่น "Mindset Transformation:", "ข้อควรระวัง:") ให้ทำเป็นตัวหนาเสมอ (เช่น **Mindset Transformation:**) โดยอิงตามต้นฉบับ **และต้องเก็บคำอธิบายไว้ในบรรทัดเดียวกันกับหัวข้อเสมอ ห้ามปัดตกไปเป็นข้อใหม่ หรือแปลงเป็น bullet เด็ดขาด**
     11. **รูปแบบตาราง (Table):** หากต้นฉบับเป็น "ตาราง" ห้ามแปลงเป็นข้อย่อย (Bullet) เด็ดขาด ให้คุณเก็บข้อมูลลงในฟิลด์ `"table"` โดยแยกเป็น `"headers"` และ `"rows"` **และอย่าลืมใส่เครื่องหมาย **ครอบข้อความ** ในตารางด้วย หากข้อความต้นฉบับในตารางมีการทำตัวหนา**
     12. **ห้ามสร้างข้อมูลซ้ำซ้อน (No Duplicate Content):** ข้อมูลใด (เช่น Workshop, กิจกรรม, เนื้อหาย่อย) ที่คุณดึงไปจัดวางในหมวดใดหมวดหนึ่งแล้ว (เช่น วางในตาราง Agenda แล้ว) **ห้าม** นำเนื้อหานั้นไปสร้างเป็นหัวข้อ (H2) หรือสร้างซ้ำในหมวดอื่นอีกภายนอกตารางเด็ดขาด ให้เลือกใส่แค่อย่างใดอย่างหนึ่งเท่านั้น!
+    13. **การเรียงลำดับหัวข้อ (Section Ordering):** ให้คุณส่งฟิลด์ `sections_order` เป็น Array ของคีย์หมวดหมู่ (เช่น `["rationale", "objectives", ...]`) โดยให้ "อิงการเรียงลำดับหัวข้อจากต้นฉบับเป็นหลักก่อน" เสมอ ยกเว้นว่าลำดับในต้นฉบับจะเรียงมาไม่สมเหตุสมผลจริงๆ ค่อยปรับแก้
     *** คำเตือนขั้นเด็ดขาด (CRITICAL INSTRUCTIONS) ***
-    - ZERO TRUNCATION: คุณต้องอ่านต้นฉบับตั้งแต่บรรทัดแรกจนบรรทัดสุดท้าย และคัดลอกมาให้ครบทั้ง "ชื่อหัวข้อ" และ "เนื้อหา/ข้อย่อยด้านใน" ทุกตัวอักษรแบบ 100% ห้ามดึงมาแค่ชื่อหัวข้อแล้วทิ้งเนื้อหาข้างในเด็ดขาด! ห้ามย่อ ห้ามตัดจบ ห้ามข้าม ห้ามละไว้ในฐานที่เข้าใจ การตัดเนื้อหาทิ้งแม้แต่ประโยคเดียวถือเป็นความล้มเหลวร้ายแรง! **ข้อควรระวัง: หากต้นฉบับมีหัวข้อที่ชื่อคล้ายกันแต่เนื้อหาด้านในไม่เหมือนกัน คุณต้องดึงมาให้ครบทุกหัวข้อ ห้ามรวบหรือเหมารวมตัดทิ้งเองเด็ดขาด!**
+    - ZERO TRUNCATION: คุณต้องอ่านต้นฉบับตั้งแต่บรรทัดแรกจนบรรทัดสุดท้าย และคัดลอกมาให้ครบทั้ง "ชื่อหัวข้อ" และ "เนื้อหา/ข้อย่อยด้านใน" ทุกตัวอักษรแบบ 100% ห้ามดึงมาแค่ชื่อหัวข้อแล้วทิ้งเนื้อหาข้างในเด็ดขาด! ห้ามย่อ ห้ามตัดจบ ห้ามข้าม ห้ามละไว้ในฐานที่เข้าใจ การตัดเนื้อหาทิ้งแม้แต่ประโยคเดียวถือเป็นความล้มเหลวร้ายแรง! **(ข้อยกเว้นเรื่องหัวข้อซ้ำ: หากมีหัวข้อหลัก (H2) ที่ชื่อเหมือนหรือคล้ายกัน ให้เทียบเฉพาะ "เนื้อหาด้านใน" หากเนื้อหาต่างกันเกิน 70% ให้ดึงมาสร้างเป็นหัวข้อใหม่ให้ครบถ้วน แต่ถ้าเนื้อหาเหมือนกันเกิน 70% ให้ถือว่าเป็นข้อมูลซ้ำซ้อน ไม่ต้องดึงมาสร้างซ้ำ)**
     - NO HALLUCINATION: ห้ามแต่งเติมเนื้อหาหรือคิดหัวข้อขึ้นมาเองเด็ดขาด ให้ดึงเฉพาะข้อความที่มีอยู่จริงในต้นฉบับเท่านั้น! หากหมวดใดไม่มีเนื้อหา ให้เว้นว่างเป็น Array ว่าง []
     
     ข้อความต้นฉบับ:
@@ -246,9 +262,9 @@ def format_course_text(req: FormatTextRequest):
         if fallback_reason:
             err_code = re.search(r'failed: (\d+)', fallback_reason)
             err_code_str = err_code.group(1) if err_code else "ERR"
-            filename = f"B Tools_{title_clean} ({ai_model_used} x {err_code_str}).docx"
+            filename = f"B Tools_{title_clean} (Fallback {err_code_str}).docx"
         else:
-            filename = f"B Tools_{title_clean} ({ai_model_used}).docx"
+            filename = f"B Tools_{title_clean}.docx"
         
         tmp_dir = tempfile.mkdtemp()
         output_filepath = os.path.join(tmp_dir, filename)
@@ -329,9 +345,9 @@ def format_course(doc_url: str = Form(...)):
         if fallback_reason:
             err_code = re.search(r'failed: (\d+)', fallback_reason)
             err_code_str = err_code.group(1) if err_code else "ERR"
-            filename = f"B Tools_{title_clean} ({ai_model_used} x {err_code_str}).docx"
+            filename = f"B Tools_{title_clean} (Fallback {err_code_str}).docx"
         else:
-            filename = f"B Tools_{title_clean} ({ai_model_used}).docx"
+            filename = f"B Tools_{title_clean}.docx"
         
         tmp_dir = tempfile.mkdtemp()
         output_filepath = os.path.join(tmp_dir, filename)
