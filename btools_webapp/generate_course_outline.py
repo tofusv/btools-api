@@ -46,6 +46,9 @@ def add_smart_bullet(p, text, font_size=10, bold=False):
         
     final_text = clean_text if not is_numbered_or_arrow else raw_text
     
+    # ซ่อมแซมกรณี AI ลืมใส่ ** ด้านหน้า (เช่น "Topic:**" -> "**Topic:**")
+    final_text = re.sub(r'^([^\*]+?):\*\*', r'**\1:**', final_text)
+    
     # รองรับการทำตัวหนาด้วย Markdown (**text**)
     parts = re.split(r'(\*\*.*?\*\*)', final_text)
     for part in parts:
@@ -181,14 +184,20 @@ def add_heading(doc, text, font_size=12, bold=True):
     run.bold = bold
     return p
 
-def add_rationale_p(doc, text, font_size=10):
+def add_rationale_p(doc, text, font_size=10, indent=False):
     """ย่อหน้าเนื้อหาทั่วไป (ไม่มี bullet, margin ปกติ) และรองรับ **ตัวหนา**"""
     p = doc.add_paragraph()
+    if indent:
+        p.paragraph_format.first_line_indent = Inches(0.5)
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(4)
     p.paragraph_format.line_spacing = 1.5
     
-    parts = re.split(r'(\*\*.*?\*\*)', str(text))
+    text_str = str(text)
+    # ซ่อมแซมกรณี AI ลืมใส่ ** ด้านหน้า (เช่น "Topic:**" -> "**Topic:**")
+    text_str = re.sub(r'^([^\*]+?):\*\*', r'**\1:**', text_str)
+    
+    parts = re.split(r'(\*\*.*?\*\*)', text_str)
     for part in parts:
         if not part: continue
         if part.startswith('**') and part.endswith('**') and len(part) >= 4:
@@ -398,6 +407,57 @@ def render_workshop_cell(cell, w_data):
             run_n.font.name = STRICT_FONT_NAME
             run_n.font.size = Pt(10)
 
+def render_dynamic_table(doc, table_data):
+    headers = table_data.get("headers", [])
+    rows = table_data.get("rows", [])
+    
+    if not headers and not rows:
+        return
+        
+    cols = max(len(headers), len(rows[0]) if rows else 0)
+    if cols == 0:
+        return
+        
+    table = doc.add_table(rows=1 if headers else 0, cols=cols)
+    try:
+        table.style = 'Table Grid'
+    except Exception:
+        pass
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
+
+    if headers:
+        hdr_cells = table.rows[0].cells
+        for i, h_text in enumerate(headers):
+            if i < len(hdr_cells):
+                hdr_cells[i].text = str(h_text)
+                set_cell_margins(hdr_cells[i], top=60, bottom=60, left=100, right=100)
+                for p in hdr_cells[i].paragraphs:
+                    p.paragraph_format.space_before = Pt(0)
+                    p.paragraph_format.space_after = Pt(0)
+                    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    for r in p.runs:
+                        r.font.name = STRICT_FONT_NAME
+                        r.font.size = Pt(10)
+                        r.bold = True
+                        
+    for row_data in rows:
+        row_cells = table.add_row().cells
+        for i, r_text in enumerate(row_data):
+            if i < len(row_cells):
+                row_cells[i].text = str(r_text)
+                set_cell_margins(row_cells[i], top=60, bottom=60, left=100, right=100)
+                for p in row_cells[i].paragraphs:
+                    p.paragraph_format.space_before = Pt(0)
+                    p.paragraph_format.space_after = Pt(0)
+                    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                    for r in p.runs:
+                        r.font.name = STRICT_FONT_NAME
+                        r.font.size = Pt(10)
+                        
+    apply_table_borders(table)
+    add_blank_line(doc)
+
 def generate_doc(data, output_path, template_path=None):
     global _CURRENT_AI_MODEL
     _CURRENT_AI_MODEL = data.get("_ai_model_used", "")
@@ -470,7 +530,9 @@ def generate_doc(data, output_path, template_path=None):
             for item in data["rationale"]:
                 if isinstance(item, dict):
                     if item.get("text"):
-                        add_rationale_p(doc, item["text"])
+                        add_rationale_p(doc, item["text"], indent=True)
+                    if item.get("table"):
+                        render_dynamic_table(doc, item["table"])
                     if item.get("bullets"):
                         for b in item["bullets"]:
                             add_bullet_p(doc, b)
@@ -478,7 +540,7 @@ def generate_doc(data, output_path, template_path=None):
                     elif item.get("text"):
                         add_blank_line(doc)
                 elif isinstance(item, str):
-                    add_rationale_p(doc, item)
+                    add_rationale_p(doc, item, indent=True)
                     add_blank_line(doc)
 
         elif sec_key == "objectives" and data.get("objectives"):
@@ -815,6 +877,8 @@ def generate_doc(data, output_path, template_path=None):
                     r_d = p_desc.add_run(ws.get("description", ""))
                     r_d.font.name = STRICT_FONT_NAME
                     r_d.font.size = Pt(10)
+                if ws.get("table"):
+                    render_dynamic_table(doc, ws.get("table"))
                 if ws.get("bullets"):
                     for b in ws.get("bullets"):
                         add_bullet_p(doc, b)
@@ -940,6 +1004,8 @@ def generate_doc(data, output_path, template_path=None):
                 add_heading(doc, sec.get("title", "หัวข้ออื่นๆ"), font_size=12)
                 if sec.get("description"):
                     add_rationale_p(doc, sec.get("description"))
+                if sec.get("table"):
+                    render_dynamic_table(doc, sec.get("table"))
                 if sec.get("bullets"):
                     for b in sec.get("bullets"):
                         add_bullet_p(doc, b)
