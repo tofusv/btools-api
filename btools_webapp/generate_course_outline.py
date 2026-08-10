@@ -661,7 +661,7 @@ def generate_doc(data, output_path, template_path=None):
                     set_cell_margins(row_cells[1], top=120, bottom=120, left=180, right=180)
 
                 apply_table_borders(table)
-                set_table_col_widths(table, [1.55, 5.10])
+                set_table_col_widths(table, [1.35, 5.30])
             else:
                 table = doc.add_table(rows=1, cols=1)
                 try:
