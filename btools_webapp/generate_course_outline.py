@@ -457,7 +457,7 @@ def render_dynamic_table(doc, table_data):
                 parts = re.split(r'(\*\*.*?\*\*)', text_str)
                 for part in parts:
                     if not part: continue
-                    clean_part = part[2:-2] if (part.startswith('**') and part.endswith('**') and len(part) >= 4) else part
+                    clean_part = part[2:-2] if (part.startswith('**') and part.endswith('**') and len(part) >= 4) else part.replace('**', '')
                     run = p.add_run(clean_part)
                     run.font.name = STRICT_FONT_NAME
                     run.font.size = Pt(10)
@@ -485,7 +485,8 @@ def render_dynamic_table(doc, table_data):
                         run.font.size = Pt(10)
                         run.bold = True
                     else:
-                        run = p.add_run(part)
+                        clean_part = part.replace('**', '')
+                        run = p.add_run(clean_part)
                         run.font.name = STRICT_FONT_NAME
                         run.font.size = Pt(10)
                         
