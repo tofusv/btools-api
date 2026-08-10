@@ -45,11 +45,22 @@ def add_smart_bullet(p, text, font_size=10, bold=False):
         pPr.append(numPr)
         
     final_text = clean_text if not is_numbered_or_arrow else raw_text
-    run = p.add_run(final_text)
-    run.font.name = STRICT_FONT_NAME
-    run.font.size = Pt(font_size)
-    run.bold = bold
-    return run
+    
+    # รองรับการทำตัวหนาด้วย Markdown (**text**)
+    parts = re.split(r'(\*\*.*?\*\*)', final_text)
+    for part in parts:
+        if not part: continue
+        if part.startswith('**') and part.endswith('**') and len(part) >= 4:
+            run = p.add_run(part[2:-2])
+            run.font.name = STRICT_FONT_NAME
+            run.font.size = Pt(font_size)
+            run.bold = True
+        else:
+            run = p.add_run(part)
+            run.font.name = STRICT_FONT_NAME
+            run.font.size = Pt(font_size)
+            run.bold = bold
+    return p
 
 DEFAULT_TEMPLATE = os.path.join(os.path.dirname(__file__), "templates", "template.docx")
 
@@ -171,14 +182,25 @@ def add_heading(doc, text, font_size=12, bold=True):
     return p
 
 def add_rationale_p(doc, text, font_size=10):
+    """ย่อหน้าเนื้อหาทั่วไป (ไม่มี bullet, margin ปกติ) และรองรับ **ตัวหนา**"""
     p = doc.add_paragraph()
     p.paragraph_format.first_line_indent = Inches(0.5)
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(4)
     p.paragraph_format.line_spacing = 1.5
-    run = p.add_run(text)
-    run.font.name = STRICT_FONT_NAME
-    run.font.size = Pt(font_size)
+    
+    parts = re.split(r'(\*\*.*?\*\*)', str(text))
+    for part in parts:
+        if not part: continue
+        if part.startswith('**') and part.endswith('**') and len(part) >= 4:
+            run = p.add_run(part[2:-2])
+            run.font.name = STRICT_FONT_NAME
+            run.font.size = Pt(font_size)
+            run.bold = True
+        else:
+            run = p.add_run(part)
+            run.font.name = STRICT_FONT_NAME
+            run.font.size = Pt(font_size)
     return p
 
 def add_bullet_p(doc, text, font_size=10, bold=False, left_indent_in=0.5, hanging_in=0.25):
@@ -190,8 +212,7 @@ def add_bullet_p(doc, text, font_size=10, bold=False, left_indent_in=0.5, hangin
     p.paragraph_format.left_indent = Inches(left_indent_in)
     p.paragraph_format.first_line_indent = Inches(-hanging_in)
 
-    run = add_smart_bullet(p, text, font_size=font_size)
-    run.bold = bold
+    run = add_smart_bullet(p, text, font_size=font_size, bold=bold)
     return p
 
 def is_intro_sentence(text):
