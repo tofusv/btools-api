@@ -29,8 +29,8 @@ def add_smart_bullet(p, text, font_size=10, bold=False):
     # 1. เช็คว่าขึ้นต้นด้วยตัวเลข (เช่น 1., a.) หรือลูกศร (->, ➢) หรือไม่
     is_numbered_or_arrow = bool(re.match(r'^(\d+[\.\)]|[a-zA-Z][\.\)]|->|=>|➢|➔|▪|►)\s', raw_text))
     
-    # 2. ลบสัญลักษณ์ Bullet พื้นฐาน (จุด, ขีด) ทิ้งเพื่อไม่ให้ซ้อนกัน
-    clean_text = re.sub(r'^[\s•\-\*✓👤]+', '', raw_text).strip()
+    # 2. ลบสัญลักษณ์ Bullet พื้นฐาน (จุด, ขีด) ทิ้งเพื่อไม่ให้ซ้อนกัน แต่ต้องไม่ลบ ** ของตัวหนา
+    clean_text = re.sub(r'^([\s•\-✓👤]|\*(?=\s))+', '', raw_text).strip()
     
     # 3. ถ้าไม่ใช่ตัวเลข/ลูกศร ให้ใส่ Native Word Bullet (w:numPr)
     if not is_numbered_or_arrow and clean_text:
