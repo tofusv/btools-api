@@ -38,9 +38,9 @@ def get_template_docx_path():
 
 def call_gemini_api(raw_text: str, api_key: str) -> dict:
     models_to_try = [
+        "gemini-3.7-flash",
         "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite"
+        "gemini-3.5-flash"
     ]
     
     prompt = """
@@ -280,7 +280,9 @@ def format_course_text(req: FormatTextRequest):
         
         encoded_filename = urllib.parse.quote(filename)
         headers = {
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+            "X-AI-Model-Used": str(ai_model_used),
+            "Access-Control-Expose-Headers": "Content-Disposition, X-AI-Model-Used"
         }
         return FileResponse(
             path=output_filepath,
@@ -363,7 +365,9 @@ def format_course(doc_url: str = Form(...)):
         
         encoded_filename = urllib.parse.quote(filename)
         headers = {
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+            "X-AI-Model-Used": str(ai_model_used),
+            "Access-Control-Expose-Headers": "Content-Disposition, X-AI-Model-Used"
         }
         return FileResponse(
             path=output_filepath,
