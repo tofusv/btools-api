@@ -40,7 +40,10 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
     models_to_try = [
         "gemini-3.7-flash",
         "gemini-3.6-flash",
-        "gemini-3.5-flash"
+        "gemini-3.5-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash-8b"
     ]
     
     prompt = """
@@ -181,8 +184,8 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
             
             for attempt in range(2): # ลองใหม่สูงสุด 2 ครั้งต่อ Key
                 try:
-                    print(f"กำลังส่งข้อมูลหา {model} (Key {key_idx+1}/{len(api_keys_list)} - ครั้งที่ {attempt+1})...")
-                    response = requests.post(url, json=payload, timeout=60)
+                    print(f"กำลังส่งข้อมูลหา {model} (Key {key_idx+1}/{len(api_keys_list)})...", flush=True)
+                    response = requests.post(url, json=payload, timeout=300)
                     
                     if response.status_code == 200:
                         data = response.json()
