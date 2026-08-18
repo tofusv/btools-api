@@ -202,12 +202,13 @@ def add_rationale_p(doc, text, font_size=10, indent=False):
     for part in parts:
         if not part: continue
         if part.startswith('**') and part.endswith('**') and len(part) >= 4:
-            run = p.add_run(part[2:-2])
+            run = p.add_run(part.strip('*'))
             run.font.name = STRICT_FONT_NAME
             run.font.size = Pt(font_size)
             run.bold = True
         else:
-            run = p.add_run(part)
+            clean_part = part.replace('**', '')
+            run = p.add_run(clean_part)
             run.font.name = STRICT_FONT_NAME
             run.font.size = Pt(font_size)
     return p
@@ -246,15 +247,16 @@ def add_subhead_p(doc, text, font_size=10, left_indent_in=0):
     for part in parts:
         if not part: continue
         if part.startswith('**') and part.endswith('**') and len(part) >= 4:
-            run = p.add_run(part[2:-2])
+            run = p.add_run(part.strip('*'))
             run.font.name = STRICT_FONT_NAME
             run.font.size = Pt(font_size)
             run.bold = True
         else:
-            run = p.add_run(part)
+            clean_part = part.replace('**', '')
+            run = p.add_run(clean_part)
             run.font.name = STRICT_FONT_NAME
             run.font.size = Pt(font_size)
-            # Default to Bold for subheads unless it's a mix. Actually, let's just make it bold if it's a subhead without any markdown, to match typical word formatting.
+            # Default to Bold for subheads unless it's a mix.
             run.bold = True if len(parts) == 1 else False
     return p
 
@@ -355,19 +357,7 @@ def render_workshop_cell(cell, w_data):
             p_b.paragraph_format.left_indent = Inches(0.28)
             p_b.paragraph_format.first_line_indent = Inches(-0.12)
             
-            pPr = p_b._p.get_or_add_pPr()
-            numPr = OxmlElement('w:numPr')
-            ilvl = OxmlElement('w:ilvl')
-            ilvl.set(qn('w:val'), '0')
-            numId = OxmlElement('w:numId')
-            numId.set(qn('w:val'), '1')
-            numPr.append(ilvl)
-            numPr.append(numId)
-            pPr.append(numPr)
-            
-            run_n = p_b.add_run(clean_bullet_text(b_item))
-            run_n.font.name = STRICT_FONT_NAME
-            run_n.font.size = Pt(10)
+            add_smart_bullet(p_b, b_item, font_size=10)
     else:
         w_text = str(w_data).strip()
         lines = [line.strip() for line in w_text.split('\n') if line.strip()]
@@ -409,19 +399,7 @@ def render_workshop_cell(cell, w_data):
             p_b.paragraph_format.left_indent = Inches(0.28)
             p_b.paragraph_format.first_line_indent = Inches(-0.12)
             
-            pPr = p_b._p.get_or_add_pPr()
-            numPr = OxmlElement('w:numPr')
-            ilvl = OxmlElement('w:ilvl')
-            ilvl.set(qn('w:val'), '0')
-            numId = OxmlElement('w:numId')
-            numId.set(qn('w:val'), '1')
-            numPr.append(ilvl)
-            numPr.append(numId)
-            pPr.append(numPr)
-            
-            run_n = p_b.add_run(clean_bullet_text(b_item))
-            run_n.font.name = STRICT_FONT_NAME
-            run_n.font.size = Pt(10)
+            add_smart_bullet(p_b, b_item, font_size=10)
 
 def render_dynamic_table(doc, table_data):
     headers = table_data.get("headers", [])
@@ -683,20 +661,7 @@ def generate_doc(data, output_path, template_path=None):
                                 p_t.paragraph_format.left_indent = Inches(0.12)
                                 p_t.paragraph_format.first_line_indent = Inches(-0.12)
 
-                                pPr_t = p_t._p.get_or_add_pPr()
-                                numPr_t = OxmlElement('w:numPr')
-                                ilvl_t = OxmlElement('w:ilvl')
-                                ilvl_t.set(qn('w:val'), '0')
-                                numId_t = OxmlElement('w:numId')
-                                numId_t.set(qn('w:val'), '1')
-                                numPr_t.append(ilvl_t)
-                                numPr_t.append(numId_t)
-                                pPr_t.append(numPr_t)
-
-                                clean_t = clean_bullet_text(t_title)
-                                run_t = p_t.add_run(clean_t)
-                                run_t.font.name = STRICT_FONT_NAME
-                                run_t.font.size = Pt(10)
+                                add_smart_bullet(p_t, t_title, font_size=10, bold=True)
 
                             sub_list = topic.get("sub_topics") or topic.get("sub_bullets") or []
                             for sub_item in sub_list:
@@ -707,20 +672,7 @@ def generate_doc(data, output_path, template_path=None):
                                 p_sub.paragraph_format.left_indent = Inches(0.28)
                                 p_sub.paragraph_format.first_line_indent = Inches(-0.12)
 
-                                pPr_sub = p_sub._p.get_or_add_pPr()
-                                numPr_sub = OxmlElement('w:numPr')
-                                ilvl_sub = OxmlElement('w:ilvl')
-                                ilvl_sub.set(qn('w:val'), '0')
-                                numId_sub = OxmlElement('w:numId')
-                                numId_sub.set(qn('w:val'), '1')
-                                numPr_sub.append(ilvl_sub)
-                                numPr_sub.append(numId_sub)
-                                pPr_sub.append(numPr_sub)
-
-                                clean_sub = clean_bullet_text(sub_item)
-                                run_sub = p_sub.add_run(clean_sub)
-                                run_sub.font.name = STRICT_FONT_NAME
-                                run_sub.font.size = Pt(10)
+                                add_smart_bullet(p_sub, sub_item, font_size=10)
 
                         elif isinstance(topic, str):
                             if first_topic and not module_title:
@@ -737,20 +689,7 @@ def generate_doc(data, output_path, template_path=None):
                             p_t.paragraph_format.left_indent = Inches(0.28 if is_sub else 0.12)
                             p_t.paragraph_format.first_line_indent = Inches(-0.12)
 
-                            pPr_t = p_t._p.get_or_add_pPr()
-                            numPr_t = OxmlElement('w:numPr')
-                            ilvl_t = OxmlElement('w:ilvl')
-                            ilvl_t.set(qn('w:val'), '0')
-                            numId_t = OxmlElement('w:numId')
-                            numId_t.set(qn('w:val'), '1')
-                            numPr_t.append(ilvl_t)
-                            numPr_t.append(numId_t)
-                            pPr_t.append(numPr_t)
-
-                            clean_t = clean_bullet_text(topic)
-                            run_t = p_t.add_run(clean_t)
-                            run_t.font.name = STRICT_FONT_NAME
-                            run_t.font.size = Pt(10)
+                            add_smart_bullet(p_t, topic, font_size=10)
 
                     if item.get("workshop"):
                         render_workshop_cell(row_cells[1], item.get("workshop"))
