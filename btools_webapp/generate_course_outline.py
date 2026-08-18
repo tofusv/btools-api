@@ -16,15 +16,54 @@ def clean_bullet_text(text):
         return ""
     if not isinstance(text, str):
         text = str(text)
-    txt = text.strip()
-    # Strip leading bullet markers
-    txt = re.sub(r'^[•\-\*✓👤\s]+', '', txt)
-    # Strip alphabetical prefixes like "a. ", "b. ", "c. ", "a) ", "b) ", "(a) ", "A. ", "B. "
-    txt = re.sub(r'^\(?[a-zA-Z]\)[\.\s]*', '', txt)
-    txt = re.sub(r'^[a-zA-Z][\.\)]\s*', '', txt)
-    # Strip leading numbers like "1. ", "2. ", "1) "
-    txt = re.sub(r'^\d+[\.\)]\s*', '', txt)
-    return txt.strip()
+    # ไม่ลบสัญลักษณ์ใดๆ ทั้งสิ้น เพื่อคงรูปแบบดั้งเดิม (ตัวเลข, ขีด, ลูกศร) ตามที่ AI ส่งมา
+    return text.strip()
+
+def add_smart_bullet(p, text, font_size=10, bold=False):
+    if text is None:
+        return None
+    if not isinstance(text, str):
+        text = str(text)
+    
+    raw_text = text.strip()
+    # 1. เช็คว่าขึ้นต้นด้วยตัวเลข (เช่น 1., a.) หรือลูกศร (->, ➢) หรือไม่
+    is_numbered_or_arrow = bool(re.match(r'^(\d+[\.\)]|[a-zA-Z][\.\)]|->|=>|➢|➔|▪|►)\s', raw_text))
+    
+    # 2. ลบสัญลักษณ์ Bullet พื้นฐาน (จุด, ขีด) ทิ้งเพื่อไม่ให้ซ้อนกัน แต่ต้องไม่ลบ ** ของตัวหนา
+    clean_text = re.sub(r'^([\s•\-✓👤]|\*(?=\s))+', '', raw_text).strip()
+    
+    # 3. ถ้าไม่ใช่ตัวเลข/ลูกศร ให้ใส่ Native Word Bullet (w:numPr)
+    if not is_numbered_or_arrow and clean_text:
+        pPr = p._p.get_or_add_pPr()
+        numPr = OxmlElement('w:numPr')
+        ilvl = OxmlElement('w:ilvl')
+        ilvl.set(qn('w:val'), '0')
+        numId = OxmlElement('w:numId')
+        numId.set(qn('w:val'), '1')
+        numPr.append(ilvl)
+        numPr.append(numId)
+        pPr.append(numPr)
+        
+    final_text = clean_text if not is_numbered_or_arrow else raw_text
+    
+    # ซ่อมแซมกรณี AI ลืมใส่ ** ด้านหน้า (เช่น "Topic:**" -> "**Topic:**")
+    final_text = re.sub(r'^([^\*]+?):\*\*', r'**\1:**', final_text)
+    
+    # รองรับการทำตัวหนาด้วย Markdown (**text**)
+    parts = re.split(r'(\*\*.*?\*\*)', final_text)
+    for part in parts:
+        if not part: continue
+        if part.startswith('**') and part.endswith('**') and len(part) >= 4:
+            run = p.add_run(part[2:-2])
+            run.font.name = STRICT_FONT_NAME
+            run.font.size = Pt(font_size)
+            run.bold = True
+        else:
+            run = p.add_run(part)
+            run.font.name = STRICT_FONT_NAME
+            run.font.size = Pt(font_size)
+            run.bold = bold
+    return p
 
 DEFAULT_TEMPLATE = os.path.join(os.path.dirname(__file__), "templates", "template.docx")
 
@@ -145,15 +184,31 @@ def add_heading(doc, text, font_size=12, bold=True):
     run.bold = bold
     return p
 
-def add_rationale_p(doc, text, font_size=10):
+def add_rationale_p(doc, text, font_size=10, indent=False):
+    """ย่อหน้าเนื้อหาทั่วไป (ไม่มี bullet, margin ปกติ) และรองรับ **ตัวหนา**"""
     p = doc.add_paragraph()
-    p.paragraph_format.first_line_indent = Inches(0.5)
+    if indent:
+        p.paragraph_format.first_line_indent = Inches(0.5)
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(4)
     p.paragraph_format.line_spacing = 1.5
-    run = p.add_run(text)
-    run.font.name = STRICT_FONT_NAME
-    run.font.size = Pt(font_size)
+    
+    text_str = str(text)
+    # ซ่อมแซมกรณี AI ลืมใส่ ** ด้านหน้า (เช่น "Topic:**" -> "**Topic:**")
+    text_str = re.sub(r'^([^\*]+?):\*\*', r'**\1:**', text_str)
+    
+    parts = re.split(r'(\*\*.*?\*\*)', text_str)
+    for part in parts:
+        if not part: continue
+        if part.startswith('**') and part.endswith('**') and len(part) >= 4:
+            run = p.add_run(part[2:-2])
+            run.font.name = STRICT_FONT_NAME
+            run.font.size = Pt(font_size)
+            run.bold = True
+        else:
+            run = p.add_run(part)
+            run.font.name = STRICT_FONT_NAME
+            run.font.size = Pt(font_size)
     return p
 
 def add_bullet_p(doc, text, font_size=10, bold=False, left_indent_in=0.5, hanging_in=0.25):
@@ -165,21 +220,7 @@ def add_bullet_p(doc, text, font_size=10, bold=False, left_indent_in=0.5, hangin
     p.paragraph_format.left_indent = Inches(left_indent_in)
     p.paragraph_format.first_line_indent = Inches(-hanging_in)
 
-    pPr = p._p.get_or_add_pPr()
-    numPr = OxmlElement('w:numPr')
-    ilvl = OxmlElement('w:ilvl')
-    ilvl.set(qn('w:val'), '0')
-    numId = OxmlElement('w:numId')
-    numId.set(qn('w:val'), '1')
-    numPr.append(ilvl)
-    numPr.append(numId)
-    pPr.append(numPr)
-
-    clean_text = clean_bullet_text(text)
-    run = p.add_run(clean_text)
-    run.font.name = STRICT_FONT_NAME
-    run.font.size = Pt(font_size)
-    run.bold = bold
+    run = add_smart_bullet(p, text, font_size=font_size, bold=bold)
     return p
 
 def is_intro_sentence(text):
@@ -189,16 +230,31 @@ def is_intro_sentence(text):
     intro_keywords = ["เพื่อให้", "เมื่อจบ", "เมื่อสิ้นสุด", "วัตถุประสงค์", "ผู้เข้าอบรมจะสามารถ", "ผู้เข้าอบรมสามารถ"]
     return any(kw in t for kw in intro_keywords) or t.endswith(":") or t.endswith("ดังนี้") or t.endswith("สามารถ")
 
-def add_subhead_p(doc, text, font_size=10, left_indent_in=0.5):
+def add_subhead_p(doc, text, font_size=10, left_indent_in=0):
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(3)
     p.paragraph_format.line_spacing = 1.35
     p.paragraph_format.left_indent = Inches(left_indent_in)
-    run = p.add_run(text.strip())
-    run.font.name = STRICT_FONT_NAME
-    run.font.size = Pt(font_size)
-    run.bold = False
+    
+    text_str = str(text).strip()
+    # ซ่อมแซมกรณี AI ลืมใส่ ** ด้านหน้า (เช่น "Topic:**" -> "**Topic:**")
+    text_str = re.sub(r'^([^\*]+?):\*\*', r'**\1:**', text_str)
+    
+    parts = re.split(r'(\*\*.*?\*\*)', text_str)
+    for part in parts:
+        if not part: continue
+        if part.startswith('**') and part.endswith('**') and len(part) >= 4:
+            run = p.add_run(part[2:-2])
+            run.font.name = STRICT_FONT_NAME
+            run.font.size = Pt(font_size)
+            run.bold = True
+        else:
+            run = p.add_run(part)
+            run.font.name = STRICT_FONT_NAME
+            run.font.size = Pt(font_size)
+            # Default to Bold for subheads unless it's a mix. Actually, let's just make it bold if it's a subhead without any markdown, to match typical word formatting.
+            run.bold = True if len(parts) == 1 else False
     return p
 
 def fix_footer_page_number(doc):
@@ -366,7 +422,80 @@ def render_workshop_cell(cell, w_data):
             run_n.font.name = STRICT_FONT_NAME
             run_n.font.size = Pt(10)
 
+def render_dynamic_table(doc, table_data):
+    headers = table_data.get("headers", [])
+    rows = table_data.get("rows", [])
+    
+    if not headers and not rows:
+        return
+        
+    cols = max(len(headers), len(rows[0]) if rows else 0)
+    if cols == 0:
+        return
+        
+    table = doc.add_table(rows=1 if headers else 0, cols=cols)
+    try:
+        table.style = 'Table Grid'
+    except Exception:
+        pass
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
+
+    if headers:
+        hdr_cells = table.rows[0].cells
+        for i, h_text in enumerate(headers):
+            if i < len(hdr_cells):
+                hdr_cells[i].text = ""
+                set_cell_margins(hdr_cells[i], top=60, bottom=60, left=100, right=100)
+                p = hdr_cells[i].paragraphs[0]
+                p.paragraph_format.space_before = Pt(0)
+                p.paragraph_format.space_after = Pt(0)
+                p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+                text_str = str(h_text).strip()
+                text_str = re.sub(r'^([^\*]+?):\*\*', r'**\1:**', text_str)
+                parts = re.split(r'(\*\*.*?\*\*)', text_str)
+                for part in parts:
+                    if not part: continue
+                    clean_part = part[2:-2] if (part.startswith('**') and part.endswith('**') and len(part) >= 4) else part
+                    run = p.add_run(clean_part)
+                    run.font.name = STRICT_FONT_NAME
+                    run.font.size = Pt(10)
+                    run.bold = True
+                        
+    for row_data in rows:
+        row_cells = table.add_row().cells
+        for i, r_text in enumerate(row_data):
+            if i < len(row_cells):
+                row_cells[i].text = ""
+                set_cell_margins(row_cells[i], top=60, bottom=60, left=100, right=100)
+                p = row_cells[i].paragraphs[0]
+                p.paragraph_format.space_before = Pt(0)
+                p.paragraph_format.space_after = Pt(0)
+                p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                
+                text_str = str(r_text).strip()
+                text_str = re.sub(r'^([^\*]+?):\*\*', r'**\1:**', text_str)
+                parts = re.split(r'(\*\*.*?\*\*)', text_str)
+                for part in parts:
+                    if not part: continue
+                    if part.startswith('**') and part.endswith('**') and len(part) >= 4:
+                        run = p.add_run(part[2:-2])
+                        run.font.name = STRICT_FONT_NAME
+                        run.font.size = Pt(10)
+                        run.bold = True
+                    else:
+                        run = p.add_run(part)
+                        run.font.name = STRICT_FONT_NAME
+                        run.font.size = Pt(10)
+                        
+    apply_table_borders(table)
+    add_blank_line(doc)
+
 def generate_doc(data, output_path, template_path=None):
+    global _CURRENT_AI_MODEL
+    _CURRENT_AI_MODEL = data.get("_ai_model_used", "")
+    
     if not template_path or not os.path.exists(template_path):
         script_dir = os.path.dirname(os.path.abspath(__file__))
         rel_template = os.path.abspath(os.path.join(script_dir, "..", "templates", "template.docx"))
@@ -393,6 +522,7 @@ def generate_doc(data, output_path, template_path=None):
             section.right_margin = Inches(0.787)
 
     fix_footer_page_number(doc)
+    sanitize_pgmar(doc)
 
     # Title TH (H1: 13pt Bold)
     if data.get("course_title_th"):
@@ -434,7 +564,9 @@ def generate_doc(data, output_path, template_path=None):
             for item in data["rationale"]:
                 if isinstance(item, dict):
                     if item.get("text"):
-                        add_rationale_p(doc, item["text"])
+                        add_rationale_p(doc, item["text"], indent=True)
+                    if item.get("table"):
+                        render_dynamic_table(doc, item["table"])
                     if item.get("bullets"):
                         for b in item["bullets"]:
                             add_bullet_p(doc, b)
@@ -442,7 +574,7 @@ def generate_doc(data, output_path, template_path=None):
                     elif item.get("text"):
                         add_blank_line(doc)
                 elif isinstance(item, str):
-                    add_rationale_p(doc, item)
+                    add_rationale_p(doc, item, indent=True)
                     add_blank_line(doc)
 
         elif sec_key == "objectives" and data.get("objectives"):
@@ -624,7 +756,7 @@ def generate_doc(data, output_path, template_path=None):
                     set_cell_margins(row_cells[1], top=120, bottom=120, left=180, right=180)
 
                 apply_table_borders(table)
-                set_table_col_widths(table, [1.55, 5.10])
+                set_table_col_widths(table, [1.35, 5.30])
             else:
                 table = doc.add_table(rows=1, cols=1)
                 try:
@@ -678,20 +810,7 @@ def generate_doc(data, output_path, template_path=None):
                                 p_t.paragraph_format.left_indent = Inches(0.12)
                                 p_t.paragraph_format.first_line_indent = Inches(-0.12)
 
-                                pPr_t = p_t._p.get_or_add_pPr()
-                                numPr_t = OxmlElement('w:numPr')
-                                ilvl_t = OxmlElement('w:ilvl')
-                                ilvl_t.set(qn('w:val'), '0')
-                                numId_t = OxmlElement('w:numId')
-                                numId_t.set(qn('w:val'), '1')
-                                numPr_t.append(ilvl_t)
-                                numPr_t.append(numId_t)
-                                pPr_t.append(numPr_t)
-
-                                clean_t = clean_bullet_text(t_title)
-                                run_t = p_t.add_run(clean_t)
-                                run_t.font.name = STRICT_FONT_NAME
-                                run_t.font.size = Pt(10)
+                                run_t = add_smart_bullet(p_t, t_title, font_size=10, bold=True)
 
                             sub_list = topic.get("sub_topics") or topic.get("sub_bullets") or []
                             for sub_item in sub_list:
@@ -702,20 +821,7 @@ def generate_doc(data, output_path, template_path=None):
                                 p_sub.paragraph_format.left_indent = Inches(0.28)
                                 p_sub.paragraph_format.first_line_indent = Inches(-0.12)
 
-                                pPr_sub = p_sub._p.get_or_add_pPr()
-                                numPr_sub = OxmlElement('w:numPr')
-                                ilvl_sub = OxmlElement('w:ilvl')
-                                ilvl_sub.set(qn('w:val'), '0')
-                                numId_sub = OxmlElement('w:numId')
-                                numId_sub.set(qn('w:val'), '1')
-                                numPr_sub.append(ilvl_sub)
-                                numPr_sub.append(numId_sub)
-                                pPr_sub.append(numPr_sub)
-
-                                clean_sub = clean_bullet_text(sub_item)
-                                run_sub = p_sub.add_run(clean_sub)
-                                run_sub.font.name = STRICT_FONT_NAME
-                                run_sub.font.size = Pt(10)
+                                run_sub = add_smart_bullet(p_sub, sub_item, font_size=10)
 
                         elif isinstance(topic, str):
                             if first_topic and not module_title:
@@ -732,20 +838,7 @@ def generate_doc(data, output_path, template_path=None):
                             p_t.paragraph_format.left_indent = Inches(0.28 if is_sub else 0.12)
                             p_t.paragraph_format.first_line_indent = Inches(-0.12)
 
-                            pPr_t = p_t._p.get_or_add_pPr()
-                            numPr_t = OxmlElement('w:numPr')
-                            ilvl_t = OxmlElement('w:ilvl')
-                            ilvl_t.set(qn('w:val'), '0')
-                            numId_t = OxmlElement('w:numId')
-                            numId_t.set(qn('w:val'), '1')
-                            numPr_t.append(ilvl_t)
-                            numPr_t.append(numId_t)
-                            pPr_t.append(numPr_t)
-
-                            clean_t = clean_bullet_text(topic)
-                            run_t = p_t.add_run(clean_t)
-                            run_t.font.name = STRICT_FONT_NAME
-                            run_t.font.size = Pt(10)
+                            run_t = add_smart_bullet(p_t, topic, font_size=10)
 
                     if item.get("workshop"):
                         render_workshop_cell(row_cells[0], item.get("workshop"))
@@ -810,13 +903,19 @@ def generate_doc(data, output_path, template_path=None):
                 r.font.name = STRICT_FONT_NAME
                 r.font.size = Pt(10)
                 r.bold = True
-                p_desc = doc.add_paragraph()
-                p_desc.paragraph_format.space_before = Pt(0)
-                p_desc.paragraph_format.space_after = Pt(4)
-                p_desc.paragraph_format.line_spacing = 1.35
-                r_d = p_desc.add_run(ws.get('description', ''))
-                r_d.font.name = STRICT_FONT_NAME
-                r_d.font.size = Pt(10)
+                if ws.get("description"):
+                    p_desc = doc.add_paragraph()
+                    p_desc.paragraph_format.space_before = Pt(0)
+                    p_desc.paragraph_format.space_after = Pt(4)
+                    p_desc.paragraph_format.line_spacing = 1.35
+                    r_d = p_desc.add_run(ws.get("description", ""))
+                    r_d.font.name = STRICT_FONT_NAME
+                    r_d.font.size = Pt(10)
+                if ws.get("table"):
+                    render_dynamic_table(doc, ws.get("table"))
+                if ws.get("bullets"):
+                    for b in ws.get("bullets"):
+                        add_bullet_p(doc, b)
             add_blank_line(doc)
 
         elif sec_key == "teaching_style" and data.get("teaching_style"):
@@ -851,7 +950,18 @@ def generate_doc(data, output_path, template_path=None):
                 add_blank_line(doc)
             elif isinstance(data["expected_outcomes"], list):
                 for item in data["expected_outcomes"]:
-                    add_bullet_p(doc, item)
+                    if isinstance(item, dict):
+                        t_title = item.get("title") or item.get("text") or ""
+                        if t_title:
+                            add_subhead_p(doc, t_title)
+                        sub_list = item.get("sub_bullets") or item.get("bullets") or []
+                        for sub in sub_list:
+                            add_bullet_p(doc, sub, left_indent_in=0.5, hanging_in=0.25)
+                    elif isinstance(item, str):
+                        if is_intro_sentence(item):
+                            add_subhead_p(doc, item)
+                        else:
+                            add_bullet_p(doc, item, left_indent_in=0.5, hanging_in=0.25)
                 add_blank_line(doc)
 
         elif sec_key == "remarks" and data.get("remarks"):
@@ -922,6 +1032,18 @@ def generate_doc(data, output_path, template_path=None):
                 r_lj.font.name = STRICT_FONT_NAME
                 r_lj.font.size = Pt(10)
             add_blank_line(doc)
+
+        elif sec_key == "additional_sections" and data.get("additional_sections"):
+            for sec in data["additional_sections"]:
+                add_heading(doc, sec.get("title", "หัวข้ออื่นๆ"), font_size=12)
+                if sec.get("description"):
+                    add_rationale_p(doc, sec.get("description"))
+                if sec.get("table"):
+                    render_dynamic_table(doc, sec.get("table"))
+                if sec.get("bullets"):
+                    for b in sec.get("bullets"):
+                        add_bullet_p(doc, b)
+                add_blank_line(doc)
 
         elif sec_key == "followup_program" and data.get("followup_program"):
             add_heading(doc, data.get("followup_program_title", "Follow-up Program"), font_size=12)

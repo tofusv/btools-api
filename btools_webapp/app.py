@@ -38,9 +38,9 @@ def get_template_docx_path():
 
 def call_gemini_api(raw_text: str, api_key: str) -> dict:
     models_to_try = [
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash-8b"
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite"
     ]
     
     prompt = """
@@ -134,16 +134,29 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
     ]
     
     กฎเหล็กในการแยกโครงสร้างเนื้อหา (Strict Formatting Rules - MUST FOLLOW):
-    1. บทบาทของคุณคือ "ตัวแยกแยะข้อมูล" (Data Parser) หน้าที่ของคุณคือ "คัดลอก (Copy) และ วาง (Paste)" ข้อความจากต้นฉบับเป๊ะๆ ห้ามสรุปความ ห้ามตัดตอน ห้ามเรียบเรียงประโยคใหม่ และห้ามแต่งประโยคเติมเองเด็ดขาด!
-    2. ห้ามใช้สัญลักษณ์ขีด (-) หรือจุด (•) นำหน้าข้อความเด็ดขาด ให้ตัดทิ้งไปเลย (ระบบจัดหน้าจะใส่ Bullet ให้อัตโนมัติ) แต่หากต้นฉบับใช้ตัวเลขหรือตัวอักษรนำหน้า ให้คุณคงตัวเลข/ตัวอักษรนั้นไว้
-    3. ลำดับหัวข้อ: H2 คือชื่อหมวดหลัก -> H3 คือหัวข้อรอง -> H4 คือข้อย่อยใต้ H3
-    4. ตรวจสอบความซ้อนของหัวข้อใน Agenda อย่างละเอียดที่สุด
-    5. รูปแบบผลลัพธ์ต้องเป็น JSON ที่ valid เท่านั้น
-    6. การตีความหัวข้อ (Semantic Mapping): ดึงเนื้อหาไปใส่หมวดที่ถูกต้องตามความหมาย ห้ามทิ้ง
-    7. การเน้นข้อความ (Bold Text): ให้คุณใส่เครื่องหมายดอกจันคู่ครอบคำเพื่อทำตัวหนา เช่น **ข้อความ** โดยอิงตามต้นฉบับเป็นหลัก
-    8. ห้ามแต่งหัวข้อใหม่ หรือพิมพ์ชื่อหมวดหมู่ซ้ำ
-    9. ห้ามสร้างข้อมูลซ้ำซ้อน: ข้อมูลที่ดึงไปใส่ในตาราง Agenda แล้ว ห้ามนำไปสร้างเป็นหัวข้อ H2 ซ้ำอีก
-    10. การเรียงลำดับหัวข้อ: ให้ส่งฟิลด์ sections_order เรียงลำดับตามต้นฉบับเป็นหลัก
+    1. บทบาทของคุณคือ "ตัวแยกแยะข้อมูล" (Data Parser) หน้าที่ของคุณคือ **"คัดลอก (Copy) และ วาง (Paste)"** ข้อความจากต้นฉบับเป๊ะๆ ห้ามสรุปความ ห้ามตัดตอน ห้ามเรียบเรียงประโยคใหม่ และห้ามแต่งประโยคเติมเองเด็ดขาด! (อนุญาตให้แก้แค่คำผิด หรือเติมคำที่พิมพ์ตกหล่นให้สมบูรณ์เท่านั้น)
+    2. วิทยากรแต่ละคนจะมีสไตล์การเขียนไม่เหมือนกัน หน้าที่ของคุณคือมองหาว่าข้อความไหนคือ "วัตถุประสงค์" ข้อความไหนคือ "หัวข้อ (Agenda)" แล้วจับข้อความนั้นยัดลง JSON โครงสร้างของเราให้ถูกต้อง โดยที่เนื้อหาต้องคงเดิมทุกตัวอักษร
+    3. ห้ามใช้สัญลักษณ์ขีด (-) หรือจุด (•) นำหน้าข้อความเด็ดขาด ให้ตัดทิ้งไปเลย (ระบบจัดหน้าจะใส่ Bullet ให้อัตโนมัติ) แต่หากต้นฉบับใช้ "ตัวเลข" (เช่น 1. 2. 3.) หรือ "ตัวอักษร" (เช่น a. b. c.) ให้นำหน้า ให้คุณคงตัวเลข/ตัวอักษรนั้นไว้ ห้ามตัดทิ้ง!
+    4. ลำดับหัวข้อ: H2 คือชื่อหมวดหลัก -> H3 คือหัวข้อรอง (เช่น รู้ คิด ทำ) -> H4 คือข้อย่อยใต้ H3
+    5. ตรวจสอบความซ้อนของหัวข้อใน Agenda อย่างละเอียดที่สุด:
+       - หากมีหัวข้อหลักแล้วมีข้อย่อยซ้อนลงไปอีกชั้น (เช่น "ความคาดหวัง..." แล้วมีข้อย่อย "นิยาม..." และ "ผลกระทบ...") **ต้องจัดให้อยู่ในรูปแบบวัตถุ {"title": "ความคาดหวัง...", "sub_topics": ["นิยาม...", "ผลกระทบ..."]}** ห้ามดึงออกมาวางเป็นหัวข้อเรียงระนาบเดียวกันเด็ดขาด!
+    6. รูปแบบผลลัพธ์ต้องเป็น JSON ที่ valid เท่านั้น
+    7. **การตีความหัวข้อ (Semantic Mapping):** วิทยากรแต่ละคนอาจใช้คำเรียกหัวข้อไม่เหมือนกัน ให้คุณจับคู่ความหมายให้เข้ากับ Key ใน JSON โดยอัตโนมัติ เช่น:
+       - `objectives` = วัตถุประสงค์, เป้าหมาย, สิ่งที่ผู้เรียนจะทำได้
+       - `expected_outcomes` = ประโยชน์ที่ได้รับ, ผลลัพธ์ที่คาดหวัง, สิ่งที่องค์กรจะได้
+       - `learning_methods` = รูปแบบการอบรม, วิธีการสอน, สัดส่วนการเรียนรู้
+       - `target_audience` = ผู้เข้าอบรม, กลุ่มเป้าหมาย, ผู้ที่เหมาะสม
+       - `workshop_activities` = กิจกรรมกลุ่ม, ฝึกปฏิบัติ, Workshop, กรณีศึกษา
+       หากเจอหัวข้อชื่อแปลกๆ แต่ความหมายตรงกับหมวดไหน ให้ดึงเนื้อหาไปใส่หมวดนั้นได้เลย ห้ามทิ้ง!
+    8. **การเน้นข้อความ (Bold Text):** ให้คุณใส่เครื่องหมายดอกจันคู่ครอบคำเพื่อทำตัวหนา เช่น **ข้อความ** โดยให้ "อิงตามต้นฉบับเป็นหลัก" หากต้นฉบับทำตัวหนาตรงไหนให้ทำตามนั้น แต่คุณสามารถปรับเพิ่มลดได้นิดหน่อยหากคิดว่าช่วยให้อ่านง่ายและสวยงามขึ้น
+    9. **ห้ามแต่งหัวข้อใหม่ หรือพิมพ์ชื่อหมวดหมู่ซ้ำ:** ห้ามคิดชื่อหัวข้อขึ้นมาเองเด็ดขาดให้ดึงจากต้นฉบับเท่านั้น! และหากหมวดหมู่นั้นคือ Objectives ห้ามสร้างข้อย่อยบรรทัดแรกว่า "วัตถุประสงค์ (Objectives)" ซ้ำอีก หรือหากหมวดหมู่คือ Rationale ห้ามสร้างบรรทัดแรกว่า "หลักการและเหตุผล" ซ้ำ ให้ดึงมาเฉพาะเนื้อหาเท่านั้น
+    10. **หัวข้อย่อยในบรรทัดเดียวกัน:** คำที่ดูเหมือนหัวข้อก่อนเริ่มอธิบายเนื้อหาในบรรทัดเดียวกัน (เช่น "Mindset Transformation:", "ข้อควรระวัง:") ให้ทำเป็นตัวหนาเสมอ (เช่น **Mindset Transformation:**) โดยอิงตามต้นฉบับ **และต้องเก็บคำอธิบายไว้ในบรรทัดเดียวกันกับหัวข้อเสมอ ห้ามปัดตกไปเป็นข้อใหม่ หรือแปลงเป็น bullet เด็ดขาด**
+    11. **รูปแบบตาราง (Table):** หากต้นฉบับเป็น "ตาราง" ห้ามแปลงเป็นข้อย่อย (Bullet) เด็ดขาด ให้คุณเก็บข้อมูลลงในฟิลด์ `"table"` โดยแยกเป็น `"headers"` และ `"rows"` **และอย่าลืมใส่เครื่องหมาย **ครอบข้อความ** ในตารางด้วย หากข้อความต้นฉบับในตารางมีการทำตัวหนา**
+    12. **ห้ามสร้างข้อมูลซ้ำซ้อน (No Duplicate Content):** ข้อมูลใด (เช่น Workshop, กิจกรรม, เนื้อหาย่อย) ที่คุณดึงไปจัดวางในหมวดใดหมวดหนึ่งแล้ว (เช่น วางในตาราง Agenda แล้ว) **ห้าม** นำเนื้อหานั้นไปสร้างเป็นหัวข้อ (H2) หรือสร้างซ้ำในหมวดอื่นอีกภายนอกตารางเด็ดขาด ให้เลือกใส่แค่อย่างใดอย่างหนึ่งเท่านั้น!
+    13. **การเรียงลำดับหัวข้อ (Section Ordering):** ให้คุณส่งฟิลด์ `sections_order` เป็น Array ของคีย์หมวดหมู่ (เช่น `["rationale", "objectives", ...]`) โดยให้ "อิงการเรียงลำดับหัวข้อจากต้นฉบับเป็นหลักก่อน" เสมอ ยกเว้นว่าลำดับในต้นฉบับจะเรียงมาไม่สมเหตุสมผลจริงๆ ค่อยปรับแก้
+    *** คำเตือนขั้นเด็ดขาด (CRITICAL INSTRUCTIONS) ***
+    - ZERO TRUNCATION: คุณต้องอ่านต้นฉบับตั้งแต่บรรทัดแรกจนบรรทัดสุดท้าย และคัดลอกมาให้ครบทั้ง "ชื่อหัวข้อ" และ "เนื้อหา/ข้อย่อยด้านใน" ทุกตัวอักษรแบบ 100% ห้ามดึงมาแค่ชื่อหัวข้อแล้วทิ้งเนื้อหาข้างในเด็ดขาด! ห้ามย่อ ห้ามตัดจบ ห้ามข้าม ห้ามละไว้ในฐานที่เข้าใจ การตัดเนื้อหาทิ้งแม้แต่ประโยคเดียวถือเป็นความล้มเหลวร้ายแรง! **(ข้อยกเว้นเรื่องหัวข้อซ้ำ: หากมีหัวข้อหลัก (H2) ที่ชื่อเหมือนหรือคล้ายกัน ให้เทียบเฉพาะ "เนื้อหาด้านใน" หากเนื้อหาต่างกันเกิน 70% ให้ดึงมาสร้างเป็นหัวข้อใหม่ให้ครบถ้วน แต่ถ้าเนื้อหาเหมือนกันเกิน 70% ให้ถือว่าเป็นข้อมูลซ้ำซ้อน ไม่ต้องดึงมาสร้างซ้ำ)**
+    - NO HALLUCINATION: ห้ามแต่งเติมเนื้อหาหรือคิดหัวข้อขึ้นมาเองเด็ดขาด ให้ดึงเฉพาะข้อความที่มีอยู่จริงในต้นฉบับเท่านั้น! หากหมวดใดไม่มีเนื้อหา ให้เว้นว่างเป็น Array ว่าง []
     
     ข้อความต้นฉบับ:
     """ + raw_text
@@ -166,38 +179,55 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
                 }
             }
             
-            try:
-                print(f"กำลังส่งข้อมูลหา {model} (Key {key_idx+1}/{len(api_keys_list)})...", flush=True)
-                response = requests.post(url, json=payload, timeout=60)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    text_out = data["candidates"][0]["content"]["parts"][0]["text"]
+            for attempt in range(2): # ลองใหม่สูงสุด 2 ครั้งต่อ Key
+                try:
+                    print(f"กำลังส่งข้อมูลหา {model} (Key {key_idx+1}/{len(api_keys_list)} - ครั้งที่ {attempt+1})...")
+                    response = requests.post(url, json=payload, timeout=60)
                     
-                    text_out = text_out.strip()
-                    if text_out.startswith("```json"):
-                        text_out = text_out[7:]
-                    elif text_out.startswith("```"):
-                        text_out = text_out[3:]
-                    if text_out.endswith("```"):
-                        text_out = text_out[:-3]
-                    text_out = text_out.strip()
+                    if response.status_code == 200:
+                        data = response.json()
+                        text_out = data["candidates"][0]["content"]["parts"][0]["text"]
                         
-                    parsed_data = json.loads(text_out)
-                    parsed_data["_ai_model_used"] = model
-                    return parsed_data
-                else:
-                    error_msg = response.text
-                    last_error = f"{model} (Key {key_idx+1}) failed: {response.status_code}"
-                    print(f"Error {model} ({response.status_code}): {error_msg[:100]}")
-                    continue
-                    
-            except Exception as e:
-                print(f"Exception with {model} Key {key_idx+1}: {e}")
-                last_error = str(e)
-                continue
+                        # ลบ Markdown backticks เผื่อ AI ตอบกลับมาพร้อมฟอร์แมต
+                        text_out = text_out.strip()
+                        if text_out.startswith("```json"):
+                            text_out = text_out[7:]
+                        elif text_out.startswith("```"):
+                            text_out = text_out[3:]
+                        if text_out.endswith("```"):
+                            text_out = text_out[:-3]
+                        text_out = text_out.strip()
+                            
+                        parsed_data = json.loads(text_out)
+                        parsed_data["_ai_model_used"] = model  # Inject the model name
+                        parsed_data["_keys_loaded"] = len(api_keys_list)
+                        if model != models_to_try[0] and last_error:
+                            parsed_data["_fallback_reason"] = last_error
+                        return parsed_data
+                    else:
+                        error_msg = response.text
+                        last_error = f"{model} (Key {key_idx+1}) failed: {response.status_code}"
+                        
+                        if response.status_code in (404, 403, 400):
+                            print(f"ข้าม {model} เนื่องจากไม่มีสิทธิ์ใช้งานหรือไม่มีโมเดลนี้ ({response.status_code})")
+                            break # ข้ามไปโมเดลถัดไป
+                        elif response.status_code == 429:
+                            if len(api_keys_list) > 1 and key_idx < len(api_keys_list) - 1:
+                                print(f"ติด Rate Limit 429 สำหรับ Key {key_idx+1}: สลับไปใช้ Key {key_idx+2} ทันที!")
+                            else:
+                                print(f"Key ทั้งหมดของ {model} โควต้าเต็ม (429) แล้ว! กำลังข้ามไปใช้โมเดลถัดไป...")
+                            break # ข้ามไป Key หรือ Model ถัดไปทันที
+                            
+                        print(f"เกิดข้อผิดพลาดกับ {model} ({response.status_code}): รอ 8 วินาทีแล้วลองใหม่... - {error_msg}")
+                        time.sleep(8)
+                        
+                except Exception as e:
+                    print(f"Exception with {model} Key {key_idx+1}: {e}")
+                    last_error = str(e)
+                    time.sleep(5)
+
             
-    raise ValueError(f"ไม่สามารถประมวลผลด้วย Gemini API ได้: {last_error}")
+    raise ValueError(f"ไม่สามารถประมวลผลด้วย Gemini API ได้ครบทุกโมเดล: {last_error}")
 
 class FormatTextRequest(BaseModel):
     raw_text: str
@@ -209,6 +239,7 @@ def format_course_text(req: FormatTextRequest):
         if not req.raw_text.strip():
             raise HTTPException(status_code=400, detail="raw_text is empty")
             
+        # Merge API keys from request and environment variables
         api_keys_str = ""
         if req.api_key:
             api_keys_str += req.api_key + ","
@@ -227,7 +258,13 @@ def format_course_text(req: FormatTextRequest):
             title_clean = "Course Outline"
             
         ai_model_used = data.get("_ai_model_used", "gemini-unknown")
-        filename = f"B Tools_{title_clean}.docx"
+        fallback_reason = data.get("_fallback_reason", "")
+        if fallback_reason:
+            err_code = re.search(r'failed: (\d+)', fallback_reason)
+            err_code_str = err_code.group(1) if err_code else "ERR"
+            filename = f"B Tools_{title_clean} (Fallback {err_code_str}).docx"
+        else:
+            filename = f"B Tools_{title_clean}.docx"
         
         tmp_dir = tempfile.mkdtemp()
         output_filepath = os.path.join(tmp_dir, filename)
@@ -243,9 +280,7 @@ def format_course_text(req: FormatTextRequest):
         
         encoded_filename = urllib.parse.quote(filename)
         headers = {
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
-            "X-AI-Model-Used": str(ai_model_used),
-            "Access-Control-Expose-Headers": "Content-Disposition, X-AI-Model-Used"
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
         }
         return FileResponse(
             path=output_filepath,
@@ -306,7 +341,13 @@ def format_course(doc_url: str = Form(...)):
             title_clean = "Course Outline"
             
         ai_model_used = data.get("_ai_model_used", "gemini-unknown")
-        filename = f"B Tools_{title_clean}.docx"
+        fallback_reason = data.get("_fallback_reason", "")
+        if fallback_reason:
+            err_code = re.search(r'failed: (\d+)', fallback_reason)
+            err_code_str = err_code.group(1) if err_code else "ERR"
+            filename = f"B Tools_{title_clean} (Fallback {err_code_str}).docx"
+        else:
+            filename = f"B Tools_{title_clean}.docx"
         
         tmp_dir = tempfile.mkdtemp()
         output_filepath = os.path.join(tmp_dir, filename)
@@ -322,9 +363,7 @@ def format_course(doc_url: str = Form(...)):
         
         encoded_filename = urllib.parse.quote(filename)
         headers = {
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
-            "X-AI-Model-Used": str(ai_model_used),
-            "Access-Control-Expose-Headers": "Content-Disposition, X-AI-Model-Used"
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
         }
         return FileResponse(
             path=output_filepath,
