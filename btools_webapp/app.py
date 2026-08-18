@@ -38,12 +38,9 @@ def get_template_docx_path():
 
 def call_gemini_api(raw_text: str, api_key: str) -> dict:
     models_to_try = [
-        "gemini-3.7-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash-8b"
+        "gemini-3.5-flash-lite"
     ]
     
     prompt = """
@@ -184,8 +181,8 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
             
             for attempt in range(2): # ลองใหม่สูงสุด 2 ครั้งต่อ Key
                 try:
-                    print(f"กำลังส่งข้อมูลหา {model} (Key {key_idx+1}/{len(api_keys_list)})...", flush=True)
-                    response = requests.post(url, json=payload, timeout=300)
+                    print(f"กำลังส่งข้อมูลหา {model} (Key {key_idx+1}/{len(api_keys_list)} - ครั้งที่ {attempt+1})...")
+                    response = requests.post(url, json=payload, timeout=60)
                     
                     if response.status_code == 200:
                         data = response.json()
@@ -283,9 +280,7 @@ def format_course_text(req: FormatTextRequest):
         
         encoded_filename = urllib.parse.quote(filename)
         headers = {
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
-            "X-AI-Model-Used": str(ai_model_used),
-            "Access-Control-Expose-Headers": "Content-Disposition, X-AI-Model-Used"
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
         }
         return FileResponse(
             path=output_filepath,
@@ -368,9 +363,7 @@ def format_course(doc_url: str = Form(...)):
         
         encoded_filename = urllib.parse.quote(filename)
         headers = {
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
-            "X-AI-Model-Used": str(ai_model_used),
-            "Access-Control-Expose-Headers": "Content-Disposition, X-AI-Model-Used"
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
         }
         return FileResponse(
             path=output_filepath,
