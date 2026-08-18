@@ -167,9 +167,14 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
         api_keys_list = [api_key]
 
     last_error = None
+    start_time = time.time()
     
     for model in models_to_try:
         for key_idx, current_key in enumerate(api_keys_list):
+            if time.time() - start_time > 55:
+                print("ใช้เวลาประมวลผลนานเกินกำหนด (ใกล้ถึง 60 วินาที) ยกเลิกการลองใหม่เพื่อป้องกัน Apps Script Timeout", flush=True)
+                raise ValueError(f"ประมวลผลนานเกิน 60 วินาที ไม่สามารถเรียก Gemini ได้สำเร็จ: {last_error}")
+                
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={current_key}"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
@@ -182,7 +187,9 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
             
             try:
                 print(f"กำลังส่งข้อมูลหา {model} (Key {key_idx+1}/{len(api_keys_list)})...", flush=True)
-                response = requests.post(url, json=payload, timeout=12)
+                # Google Apps Script timeouts at 60s. We use 50s here to give Gemini enough time to generate a long JSON, 
+                # but fail just before Apps Script times out if it really hangs.
+                response = requests.post(url, json=payload, timeout=50)
                 
                 if response.status_code == 200:
                     data = response.json()
