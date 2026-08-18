@@ -180,52 +180,51 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
                 }
             }
             
-            for attempt in range(2): # ลองใหม่สูงสุด 2 ครั้งต่อ Key
-                try:
-                    print(f"กำลังส่งข้อมูลหา {model} (Key {key_idx+1}/{len(api_keys_list)} - ครั้งที่ {attempt+1})...")
-                    response = requests.post(url, json=payload, timeout=60)
+            try:
+                print(f"กำลังส่งข้อมูลหา {model} (Key {key_idx+1}/{len(api_keys_list)})...", flush=True)
+                response = requests.post(url, json=payload, timeout=12)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    text_out = data["candidates"][0]["content"]["parts"][0]["text"]
                     
-                    if response.status_code == 200:
-                        data = response.json()
-                        text_out = data["candidates"][0]["content"]["parts"][0]["text"]
+                    # ลบ Markdown backticks เผื่อ AI ตอบกลับมาพร้อมฟอร์แมต
+                    text_out = text_out.strip()
+                    if text_out.startswith("```json"):
+                        text_out = text_out[7:]
+                    elif text_out.startswith("```"):
+                        text_out = text_out[3:]
+                    if text_out.endswith("```"):
+                        text_out = text_out[:-3]
+                    text_out = text_out.strip()
                         
-                        # ลบ Markdown backticks เผื่อ AI ตอบกลับมาพร้อมฟอร์แมต
-                        text_out = text_out.strip()
-                        if text_out.startswith("```json"):
-                            text_out = text_out[7:]
-                        elif text_out.startswith("```"):
-                            text_out = text_out[3:]
-                        if text_out.endswith("```"):
-                            text_out = text_out[:-3]
-                        text_out = text_out.strip()
-                            
-                        parsed_data = json.loads(text_out)
-                        parsed_data["_ai_model_used"] = model  # Inject the model name
-                        parsed_data["_keys_loaded"] = len(api_keys_list)
-                        if model != models_to_try[0] and last_error:
-                            parsed_data["_fallback_reason"] = last_error
-                        return parsed_data
+                    parsed_data = json.loads(text_out)
+                    parsed_data["_ai_model_used"] = model  # Inject the model name
+                    parsed_data["_keys_loaded"] = len(api_keys_list)
+                    if model != models_to_try[0] and last_error:
+                        parsed_data["_fallback_reason"] = last_error
+                    return parsed_data
+                else:
+                    error_msg = response.text
+                    last_error = f"{model} (Key {key_idx+1}) failed: {response.status_code}"
+                    
+                    if response.status_code in (404, 403, 400):
+                        print(f"ข้าม {model} เนื่องจากไม่มีสิทธิ์ใช้งานหรือไม่มีโมเดลนี้ ({response.status_code})")
+                        continue
+                    elif response.status_code == 429:
+                        print(f"ติด Rate Limit 429 สำหรับ Key {key_idx+1}: สลับไปใช้ Key ถัดไปทันที...")
+                        continue
+                    elif response.status_code == 503:
+                        print(f"{model} คนใช้งานหนาแน่น (503): สลับไปใช้ Key/โมเดล ถัดไปทันที...")
+                        continue
                     else:
-                        error_msg = response.text
-                        last_error = f"{model} (Key {key_idx+1}) failed: {response.status_code}"
-                        
-                        if response.status_code in (404, 403, 400):
-                            print(f"ข้าม {model} เนื่องจากไม่มีสิทธิ์ใช้งานหรือไม่มีโมเดลนี้ ({response.status_code})")
-                            break # ข้ามไปโมเดลถัดไป
-                        elif response.status_code == 429:
-                            if len(api_keys_list) > 1 and key_idx < len(api_keys_list) - 1:
-                                print(f"ติด Rate Limit 429 สำหรับ Key {key_idx+1}: สลับไปใช้ Key {key_idx+2} ทันที!")
-                            else:
-                                print(f"Key ทั้งหมดของ {model} โควต้าเต็ม (429) แล้ว! กำลังข้ามไปใช้โมเดลถัดไป...")
-                            break # ข้ามไป Key หรือ Model ถัดไปทันที
-                            
-                        print(f"เกิดข้อผิดพลาดกับ {model} ({response.status_code}): รอ 8 วินาทีแล้วลองใหม่... - {error_msg}")
-                        time.sleep(8)
-                        
-                except Exception as e:
-                    print(f"Exception with {model} Key {key_idx+1}: {e}")
-                    last_error = str(e)
-                    time.sleep(5)
+                        print(f"เกิดข้อผิดพลาดกับ {model} ({response.status_code}): {error_msg[:100]}")
+                        continue
+                    
+            except Exception as e:
+                print(f"Exception with {model} Key {key_idx+1}: {e}")
+                last_error = str(e)
+                continue
 
             
     raise ValueError(f"ไม่สามารถประมวลผลด้วย Gemini API ได้ครบทุกโมเดล: {last_error}")
