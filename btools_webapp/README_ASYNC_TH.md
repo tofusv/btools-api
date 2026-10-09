@@ -28,6 +28,8 @@ Google Apps Script ทำงานได้สูงสุด 6 นาทีต�
 | `GEMINI_MAX_OUTPUT_TOKENS` | `8192` | ความยาวคำตอบสูงสุด หากพบ `output was truncated` ให้เพิ่มภายในขีดจำกัดของโมเดลที่ใช้อยู่ หรือแบ่งเอกสารตามวัน/หมวด |
 | `BTOOLS_JOB_DIR` | โฟลเดอร์ `job_data` ใกล้ `app.py` | ที่เก็บสถานะและ Word ที่เสร็จแล้ว |
 
+สำหรับเอกสารยาวที่พบ `Gemini output was truncated` ให้ตั้ง `GEMINI_MAX_OUTPUT_TOKENS=65536` และ `GEMINI_REQUEST_TIMEOUT_SECONDS=300` บน Render แล้ว deploy การตั้งค่าใหม่ โดยตรวจขีดจำกัดของโมเดลที่ใช้อยู่ด้วย [Gemini 3.6 Flash รองรับ output สูงสุด 65,536 tokens](https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash) งานที่เสียไประหว่าง deploy จะถูกส่งใหม่โดย trigger รอบถัดไป
+
 ระบบแก้การรอเกิน 6 นาที แต่ยังต้องอยู่ภายในขีดจำกัดของ Gemini และหน่วยความจำของ Render ไม่มีการตัดข้อความต้นฉบับเพื่อให้ไฟล์เล็กลง หาก Gemini ตอบไม่ครบเพราะ token limit งานจะแจ้งข้อผิดพลาดแทนการส่งไฟล์ที่ขาดเนื้อหา
 
 ### ใช้ได้ทั้ง Free และบริการที่มีพื้นที่เก็บถาวร
