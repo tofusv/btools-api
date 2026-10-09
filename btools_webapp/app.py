@@ -33,9 +33,9 @@ except ImportError:
     from .generate_course_outline import generate_doc
 
 try:
-    from job_store import JobStore, JobConflict, QueueFull, JobProcessingError
+    from job_store import JobStore, JobConflict, QueueFull, JobProcessingError, job_stage, job_event
 except ImportError:
-    from .job_store import JobStore, JobConflict, QueueFull, JobProcessingError
+    from .job_store import JobStore, JobConflict, QueueFull, JobProcessingError, job_stage, job_event
 
 app = FastAPI(title="B Tools Course Outline Formatter", version="1.0.0")
 
@@ -258,6 +258,47 @@ def call_gemini_api_legacy(raw_text: str, api_key: str) -> dict:
     raise ValueError(f"ไม่สามารถประมวลผลด้วย Gemini API ได้ครบทุกโมเดล: {last_error}")
 
 
+def decode_reference_response(response):
+    """Validate provider response shape before reading a model's reference plan."""
+    try:
+        body = response.json()
+    except ValueError:
+        raise JobProcessingError("Gemini returned invalid response JSON; retry analysis.", code="response_json") from None
+    if not isinstance(body, dict):
+        raise JobProcessingError("Gemini returned an invalid response object.", code="response_shape")
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list) or not candidates or not isinstance(candidates[0], dict):
+        raise JobProcessingError("Gemini returned no usable candidate.", code="response_candidate")
+    candidate = candidates[0]
+    if candidate.get("finishReason") == "MAX_TOKENS":
+        raise JobProcessingError("Gemini output was truncated; increase its output limit or split the source document.", code="output_truncated")
+    if candidate.get("finishReason") not in (None, "STOP"):
+        raise JobProcessingError("Gemini did not complete the structure analysis.", code="response_incomplete")
+    content = candidate.get("content")
+    parts = content.get("parts") if isinstance(content, dict) else None
+    if not isinstance(parts, list):
+        raise JobProcessingError("Gemini returned invalid response content.", code="response_parts")
+    texts = []
+    for part in parts:
+        if not isinstance(part, dict):
+            raise JobProcessingError("Gemini returned invalid response parts.", code="response_parts")
+        if part.get("thought"):
+            continue
+        value = part.get("text", "")
+        if not isinstance(value, str):
+            raise JobProcessingError("Gemini returned invalid response text.", code="response_text")
+        texts.append(value)
+    try:
+        plan = json.loads("".join(texts))
+    except (ValueError, TypeError):
+        raise JobProcessingError("Gemini returned invalid plan JSON; original text was not rewritten.", code="plan_json") from None
+    # Optional provider metadata must never discard a valid document plan.
+    usage = body.get("usageMetadata")
+    if not isinstance(usage, dict):
+        usage = {}
+    return plan, {k: v for k, v in usage.items() if type(v) is int}
+
+
 def call_gemini_api(raw_text: str, api_key: str, source_document=None) -> dict:
     mode = os.getenv("BTOOLS_PARSER_MODE", "references").lower()
     if mode == "legacy":
@@ -266,12 +307,15 @@ def call_gemini_api(raw_text: str, api_key: str, source_document=None) -> dict:
     if mode != "references":
         raise JobProcessingError("BTOOLS_PARSER_MODE must be references or legacy.")
     source = source_document if source_document is not None else source_from_text(raw_text)
-    prompt = build_prompt(source)
+    with job_stage("source_validation"):
+        prompt = build_prompt(source)
     keys = list(dict.fromkeys(k.strip() for k in api_key.split(",") if k.strip()))
     models = [m.strip() for m in os.getenv("GEMINI_MODELS", "gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite").split(",") if m.strip()]
     deadline = time.monotonic() + int(os.getenv("GEMINI_TOTAL_TIMEOUT_SECONDS", "1200"))
     request_timeout = int(os.getenv("GEMINI_REQUEST_TIMEOUT_SECONDS", "180"))
     last_error = "No Gemini key/model configured."
+    last_diagnostics = None
+    failed_attempts = []
     for model in models:
         for key_index, key in enumerate(keys):
             for attempt in range(2):
@@ -283,38 +327,53 @@ def call_gemini_api(raw_text: str, api_key: str, source_document=None) -> dict:
                     "temperature": 0.0,
                     "maxOutputTokens": int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "8192"))}}
                 try:
+                    job_event("gemini_request", model=model, key_index=key_index + 1, attempt=attempt + 1)
                     response = requests.post(
                         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                         headers={"x-goog-api-key": key}, json=payload,
                         timeout=(10, max(1, min(request_timeout, remaining))))
-                except requests.RequestException:
+                except requests.RequestException as exc:
                     last_error = f"{model}: network request failed."
+                    failure = {"model": model, "attempt": attempt + 1, "code": "network_error", "exception_type": type(exc).__name__}
+                    failed_attempts.append(failure)
+                    job_event("gemini_attempt_failed", **failure)
                     continue
                 if response.status_code != 200:
                     last_error = f"{model}: HTTP {response.status_code}."
+                    failure = {"model": model, "attempt": attempt + 1, "code": "http_error", "http_status": response.status_code}
+                    failed_attempts.append(failure)
+                    job_event("gemini_attempt_failed", **failure)
                     if response.status_code in (400, 403, 404, 429):
                         break
                     if attempt == 0:
                         time.sleep(min(2, max(0, deadline - time.monotonic())))
                     continue
-                candidate = (response.json().get("candidates") or [{}])[0]
-                if candidate.get("finishReason") == "MAX_TOKENS":
-                    raise JobProcessingError("Gemini output was truncated; increase its output limit or split the source document.")
-                if candidate.get("finishReason") not in (None, "STOP"):
-                    raise JobProcessingError("Gemini did not complete the structure analysis.")
-                text_out = "".join(p.get("text", "") for p in candidate.get("content", {}).get("parts", []) if not p.get("thought"))
                 try:
-                    plan = json.loads(text_out)
-                except (ValueError, TypeError):
-                    raise JobProcessingError("Gemini returned invalid JSON; original text was not rewritten.")
-                data = resolve_plan(source, plan, apply_edits=os.getenv("BTOOLS_APPLY_TYPO_EDITS", "false").lower() == "true")
+                    with job_stage("response_decode"):
+                        plan, usage = decode_reference_response(response)
+                    with job_stage("plan_validation"):
+                        data = resolve_plan(source, plan, apply_edits=os.getenv("BTOOLS_APPLY_TYPO_EDITS", "false").lower() == "true")
+                except JobProcessingError as exc:
+                    last_error = str(exc)
+                    last_diagnostics = exc.diagnostics
+                    failure = {"model": model, "attempt": attempt + 1, "code": exc.code,
+                               "stage": (exc.diagnostics or {}).get("stage", "plan_validation")}
+                    failed_attempts.append(failure)
+                    job_event("gemini_attempt_failed", **failure)
+                    # Repeating a truncated result with the same limit wastes quota.
+                    if exc.code in ("output_truncated", "response_decode_error", "plan_validation_error"):
+                        raise
+                    continue
                 data["_ai_model_used"] = model
                 data["_keys_loaded"] = len(keys)
                 data["_audit"]["model"] = model
-                usage = response.json().get("usageMetadata", {})
-                data["_audit"]["token_usage"] = {k: v for k, v in usage.items() if type(v) is int}
+                data["_audit"]["token_usage"] = usage
+                data["_audit"]["failed_attempts"] = failed_attempts
+                job_event("gemini_plan_accepted", model=model, failed_attempts=len(failed_attempts))
                 return data
-    raise JobProcessingError(last_error + " Check model access and free-tier quota.")
+    raise JobProcessingError(last_error + " Analysis attempts exhausted; check diagnostics.",
+                             code="analysis_exhausted", diagnostics={
+                                 **(last_diagnostics or {"stage": "gemini_request"}), "attempts": failed_attempts})
 
 class FormatTextRequest(BaseModel):
     raw_text: str = ""
@@ -349,11 +408,13 @@ def require_job_token(x_btools_token: Optional[str] = Header(default=None)):
 
 
 def render_background_job(raw_text, api_keys, output_path, source_document=None):
-    data = call_gemini_api(raw_text, api_keys, source_document) if source_document is not None else call_gemini_api(raw_text, api_keys)
+    with job_stage("ai_analysis"):
+        data = call_gemini_api(raw_text, api_keys, source_document) if source_document is not None else call_gemini_api(raw_text, api_keys)
     title = data.get("course_title_en") or data.get("course_title_th") or "Course Outline"
     title = re.sub(r'[\r\n\t/\\:*?"<>|]', ' ', str(title)).replace("หลักสูตร", "").strip()
     title = re.sub(r'\s+', ' ', title)[:160] or "Course Outline"
-    generate_doc(data, output_path, template_path=get_template_docx_path())
+    with job_stage("document_render"):
+        generate_doc(data, output_path, template_path=get_template_docx_path())
     return f"B Tools_{title}.docx", data.get("_ai_model_used", "gemini-unknown"), data.get("_audit")
 
 

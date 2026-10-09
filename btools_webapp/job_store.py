@@ -10,8 +10,10 @@ import sqlite3
 import threading
 import time
 import uuid
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 
@@ -25,6 +27,47 @@ class QueueFull(ValueError):
 
 class JobProcessingError(ValueError):
     """A safe, actionable message that can be returned to the Drive client."""
+
+    def __init__(self, message, code="processing_error", diagnostics=None):
+        super().__init__(message)
+        self.code = code
+        self.diagnostics = diagnostics
+
+
+_job_context = ContextVar("btools_job", default="direct")
+
+
+def exception_diagnostics(exc, stage):
+    # No exception messages, source lines, locals, absolute paths or HTTP bodies.
+    files = {"app.py", "job_store.py", "reference_parser.py", "reference_renderer.py",
+             "generate_course_outline.py", "source_reader.py"}
+    frames = [{"file": Path(f.filename).name, "function": f.name, "line": f.lineno}
+              for f in traceback.extract_tb(exc.__traceback__) if Path(f.filename).name in files]
+    return {"stage": stage, "exception_type": type(exc).__name__, "frames": frames}
+
+
+def job_event(event, **fields):
+    logging.getLogger("uvicorn.error").info("BTools %s", json.dumps(
+        {"job_id": _job_context.get(), "event": event, **fields}, ensure_ascii=False))
+
+
+@contextmanager
+def job_stage(stage):
+    started = time.monotonic()
+    job_event("stage_started", stage=stage)
+    try:
+        yield
+    except Exception as exc:
+        info = getattr(exc, "diagnostics", None) or exception_diagnostics(exc, stage)
+        job_event("stage_failed", **info)
+        if isinstance(exc, JobProcessingError):
+            exc.diagnostics = info
+            raise
+        raise JobProcessingError(
+            f"{stage} failed ({type(exc).__name__}); check job diagnostics.",
+            code=stage + "_error", diagnostics=info) from None
+    else:
+        job_event("stage_completed", stage=stage, elapsed_seconds=round(time.monotonic() - started, 2))
 
 
 class JobStore:
@@ -47,6 +90,8 @@ class JobStore:
                 db.execute("ALTER TABLE jobs ADD COLUMN review_required INTEGER NOT NULL DEFAULT 0")
             if "audit_available" not in columns:
                 db.execute("ALTER TABLE jobs ADD COLUMN audit_available INTEGER NOT NULL DEFAULT 0")
+            if "diagnostics" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN diagnostics TEXT")
             db.execute("""UPDATE jobs SET status='failed', updated=?,
                 error='Server restarted during processing; submit a new request.'
                 WHERE status IN ('queued', 'processing')""", (time.time(),))
@@ -67,6 +112,7 @@ class JobStore:
             "id", "status", "created", "updated", "filename", "model", "error"
         )}
         public.update(review_required=bool(row["review_required"]), audit_available=bool(row["audit_available"]))
+        public["diagnostics"] = json.loads(row["diagnostics"]) if row["diagnostics"] else None
         return public
 
     def get(self, job_id):
@@ -104,31 +150,41 @@ class JobStore:
                 self._update(job_id, "failed", error="Worker is shutting down; submit a new request.")
             return self.get(job_id)
 
-    def _update(self, job_id, status, filename=None, model=None, error=None, review_required=False, audit_available=False):
+    def _update(self, job_id, status, filename=None, model=None, error=None, review_required=False, audit_available=False, diagnostics=None):
         with self._connect() as db:
-            db.execute("UPDATE jobs SET status=?,updated=?,filename=?,model=?,error=?,review_required=?,audit_available=? WHERE id=?",
-                       (status, time.time(), filename, model, error, int(review_required), int(audit_available), job_id))
+            db.execute("UPDATE jobs SET status=?,updated=?,filename=?,model=?,error=?,review_required=?,audit_available=?,diagnostics=? WHERE id=?",
+                       (status, time.time(), filename, model, error, int(review_required), int(audit_available),
+                        json.dumps(diagnostics) if diagnostics else None, job_id))
 
     def _run(self, job_id, raw_text, api_keys, render, source_document=None):
+        context_token = _job_context.set(job_id)
         self._update(job_id, "processing")
         path = self.result_path(job_id)
         try:
             result = render(raw_text, api_keys, str(path), source_document) if source_document is not None else render(raw_text, api_keys, str(path))
             filename, model = result[:2]
             audit = result[2] if len(result) > 2 else None
-            if not path.is_file() or path.stat().st_size == 0:
-                raise ValueError("No document produced")
-            if audit is not None:
-                path.with_suffix(".audit.json").write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
+            with job_stage("result_persistence"):
+                if not path.is_file() or path.stat().st_size == 0:
+                    raise JobProcessingError("Renderer produced no document.", code="missing_document")
+                if audit is not None:
+                    path.with_suffix(".audit.json").write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
             self._update(job_id, "succeeded", filename=filename, model=model,
                          review_required=bool(audit and audit.get("review_required")), audit_available=audit is not None)
         except Exception as exc:
             # Do not return exceptions containing Gemini request URLs/API keys.
-            logging.error("Course job %s failed; see formatter logs", job_id)
+            info = getattr(exc, "diagnostics", None) or exception_diagnostics(exc, "worker")
+            info["code"] = getattr(exc, "code", "worker_error")
+            job_event("job_failed", **info)
             path.unlink(missing_ok=True)
             path.with_suffix(".audit.json").unlink(missing_ok=True)
-            message = str(exc) if isinstance(exc, JobProcessingError) else "AI/document generation failed; check Render logs and retry."
-            self._update(job_id, "failed", error=message)
+            message = str(exc) if isinstance(exc, JobProcessingError) else f"Worker failed ({type(exc).__name__}); check job diagnostics."
+            for key in api_keys.split(","):
+                if key.strip():
+                    message = message.replace(key.strip(), "[redacted]")
+            self._update(job_id, "failed", error=message, diagnostics=info)
+        finally:
+            _job_context.reset(context_token)
 
     def cleanup(self, retention_seconds=7 * 24 * 3600):
         with self._connect() as db:

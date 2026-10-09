@@ -177,7 +177,7 @@ def resolve_plan(source, plan, apply_edits=False):
         if not isinstance(ref, dict) or set(ref) != {'block_id', 'start', 'end'}:
             raise JobProcessingError('AI returned an invalid source reference.')
         bid, start, end = ref['block_id'], ref['start'], ref['end']
-        if bid not in blocks:
+        if not isinstance(bid, str) or bid not in blocks:
             raise JobProcessingError('AI referenced an unknown source block.')
         _bounds(blocks[bid]['text'], start, end)
         for previous_start, previous_end in used[bid]:
@@ -281,7 +281,7 @@ def resolve_plan(source, plan, apply_edits=False):
         if not isinstance(proposal, dict) or set(proposal) != fields or not isinstance(proposal['replacement'], str) or not isinstance(proposal['reason'], str):
             raise JobProcessingError('AI returned an invalid edit proposal.')
         bid, start, end = proposal['block_id'], proposal['start'], proposal['end']
-        if bid not in blocks:
+        if not isinstance(bid, str) or bid not in blocks:
             raise JobProcessingError('AI edit references an unknown block.')
         _bounds(blocks[bid]['text'], start, end)
         if any(max(start, a) < min(end, b) for a, b in edited_ranges[bid]):
