@@ -1,0 +1,133 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const source = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8')
+  .replaceAll('YOUR_INPUT_FOLDER_ID_HERE', 'input')
+  .replaceAll('YOUR_OUTPUT_FOLDER_ID_HERE', 'output')
+  .replaceAll('YOUR_RENDER_APP_NAME', 'test')
+  .replaceAll('YOUR_NEW_GEMINI_API_KEY_HERE', 'dummy')
+  .replaceAll('YOUR_PRIVATE_JOB_TOKEN_HERE', 'private');
+
+function iterator(items) {
+  let index = 0;
+  return {hasNext: () => index < items.length, next: () => items[index++]};
+}
+function fixture(text = 'large source') {
+  let name = 'Course.docx', counter = 0, locked = false;
+  const state = {}, output = [], requests = [], logs = [];
+  const input = {getId: () => 'input-file', getName: () => name,
+    setName: n => {name = n;}, getMimeType: () => 'google-doc', isTrashed: () => false};
+  const props = {getProperties: () => ({...state}), getProperty: k => state[k] || null,
+    setProperty: (k, v) => {state[k] = v;}, deleteProperty: k => {delete state[k];}};
+  const outputFolder = {getFilesByName: n => iterator(output.filter(f => f.getName() === n)),
+    createFile: blob => {
+      let fileName = blob.name;
+      const file = {getId: () => 'out-' + output.length, getName: () => fileName,
+        setName: n => {fileName = n;}, setDescription: () => {}};
+      // Stable identity, independent of output array length after insertion.
+      const id = 'out-' + output.length; file.getId = () => id;
+      output.push(file); return file;
+    }};
+  function response(code, data) {
+    return {getResponseCode: () => code, getContentText: () => JSON.stringify(data),
+      getBlob: () => ({name: '', setName(n) {this.name = n; return this;}})};
+  }
+  const f = {input, output, requests, logs, state, props, response, outputFolder,
+    handler: (url, options) => response(options.method === 'post' ? 202 : 200,
+      {id: 'job-one', status: options.method === 'post' ? 'queued' : 'processing'})};
+  const context = {
+    Logger: {log: value => logs.push(value)}, MimeType: {GOOGLE_DOCS: 'google-doc'},
+    PropertiesService: {getScriptProperties: () => props},
+    LockService: {getScriptLock: () => ({tryLock: () => {if (locked) return false; locked = true; return true;},
+      releaseLock: () => {locked = false;}})},
+    DriveApp: {getFolderById: id => id === 'input' ? {getFiles: () => iterator([input])} : outputFolder,
+      getFileById: id => id === 'input-file' ? input : output.find(o => o.getId() === id)},
+    DocumentApp: {openById: () => ({getBody: () => ({getText: () => text})})},
+    Utilities: {getUuid: () => 'request-' + ++counter},
+    UrlFetchApp: {fetch: (url, options) => {requests.push({url, options}); return f.handler(url, options);}}
+  };
+  vm.createContext(context); vm.runInContext(source, context);
+  f.run = () => vm.runInContext('processNewCourseOutlines()', context);
+  f.recover = () => vm.runInContext('recoverStuckFiles()', context);
+  f.context = context;
+  return f;
+}
+
+const tests = {
+  'long job is submitted once and polled on later runs'() {
+    const f = fixture('large text '.repeat(10000));
+    f.run(); f.run(); f.run();
+    assert.equal(f.requests.filter(r => r.options.method === 'post').length, 1);
+    assert.equal(f.requests.filter(r => r.options.method === 'get').length, 2);
+    assert.equal(f.output.length, 0);
+    assert.equal(f.input.getName(), '[PROCESSING]_Course.docx');
+  },
+  'success creates one output and clears processing state'() {
+    const f = fixture(); f.run();
+    f.handler = url => url.endsWith('/result') ? f.response(200, {}) :
+      f.response(200, {status: 'succeeded', filename: 'B Tools_Test.docx', model: 'mock'});
+    f.run(); f.run();
+    assert.equal(f.output.length, 1);
+    assert.equal(f.output[0].getName(), 'B Tools_Test.docx');
+    assert.equal(f.input.getName(), '[DONE]_Course.docx');
+    assert.deepEqual(f.state, {});
+  },
+  'lost submit response reuses the saved request id'() {
+    const f = fixture(); let attempts = 0;
+    f.handler = () => {if (++attempts === 1) throw new Error('network response lost');
+      return f.response(202, {id: 'job-one', status: 'processing'});};
+    f.run(); f.run();
+    assert.equal(f.requests.length, 2);
+    assert.equal(JSON.parse(f.requests[0].options.payload).request_id,
+                 JSON.parse(f.requests[1].options.payload).request_id);
+    assert.equal(JSON.parse(f.state['BTOOLS_JOB_input-file']).jobId, 'job-one');
+  },
+  'server restart missing job triggers a new bounded retry'() {
+    const f = fixture(); f.run();
+    f.handler = (url, options) => options.method === 'post' ?
+      f.response(202, {id: 'new-job', status: 'queued'}) : f.response(404, {});
+    f.run();
+    assert.equal(f.input.getName(), '[PROCESSING]_[RETRY_1]_Course.docx');
+    assert.equal(JSON.parse(f.state['BTOOLS_JOB_input-file']).jobId, 'new-job');
+  },
+  'empty source is skipped and never remains processing'() {
+    const f = fixture(''); f.run();
+    assert.equal(f.input.getName(), '[SKIP]_Course.docx');
+    assert.equal(f.requests.length, 0);
+    assert.deepEqual(f.state, {});
+  },
+  'legacy recovery ignores jobs with active state'() {
+    const f = fixture(); f.input.setName('[PROCESSING]_old.docx'); f.recover();
+    assert.equal(f.input.getName(), 'old.docx');
+    f.run(); f.recover();
+    assert.equal(f.input.getName(), '[PROCESSING]_old.docx');
+  },
+  'crash after saving output recovers marker file without duplication'() {
+    const f = fixture(); f.run();
+    f.handler = url => url.endsWith('/result') ? f.response(200, {}) :
+      f.response(200, {status: 'succeeded', filename: 'B Tools_Test.docx'});
+    const save = f.props.setProperty;
+    f.props.setProperty = (k, value) => {
+      if (JSON.parse(value).outputFileId) throw new Error('hard stop after createFile');
+      save(k, value);
+    };
+    f.run();
+    assert.equal(f.output.length, 1);
+    assert.equal(f.output[0].getName(), '__BTOOLS_JOB_job-one.docx');
+    f.props.setProperty = save;
+    f.run();
+    assert.equal(f.output.length, 1);
+    assert.equal(f.input.getName(), '[DONE]_Course.docx');
+  },
+  'retry exhaustion produces SKIP'() {
+    const f = fixture();
+    f.context.testFile = f.input;
+    vm.runInContext("handleRetryRename(testFile, '[RETRY_3]_Course.docx')", f.context);
+    assert.equal(f.input.getName(), '[SKIP]_Course.docx');
+  }
+};
+for (const [name, test] of Object.entries(tests)) {
+  test(); console.log('PASS ' + name);
+}
+console.log(Object.keys(tests).length + ' automation tests passed');
