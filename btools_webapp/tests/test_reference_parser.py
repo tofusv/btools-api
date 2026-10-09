@@ -54,6 +54,30 @@ def identity_plan(source):
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_nested_modules_and_source_table_render_without_losing_content(self):
+        original = Document()
+        for text in ['Day 1', '09:00', 'Module A', 'Exercise', 'Day 2', 'Module B', 'Conclusion']:
+            original.add_paragraph(text)
+        original.add_table(rows=1, cols=1).cell(0, 0).text = 'Original table'
+        source = source_from_docx_bytes(doc_bytes(original))
+        specs = [('day1', 'module', ''), ('time', 'time', 'day1'),
+                 ('a', 'module', 'day1'), ('exercise', 'paragraph', 'a'),
+                 ('day2', 'module', ''), ('b', 'module', 'day2'),
+                 ('conclusion', 'paragraph', 'b')]
+        nodes = [node(nid, kind, block['id'], block['text'], parent)
+                 for (nid, kind, parent), block in zip(specs, source['blocks'])]
+        nodes.append(node('table', 'table', parent='b', table=source['tables'][0]['id']))
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            path = Path(tmp) / 'nested.docx'
+            generate_doc(resolve_plan(source, plan(nodes)), str(path))
+            rendered = source_from_docx_bytes(path.read_bytes())
+            text = '\n'.join(b['text'] for b in rendered['blocks'])
+            for block in source['blocks']:
+                self.assertIn(block['text'], text)
+            doc = Document(path)
+            nested = doc.tables[0].cell(1, 1).tables[0]
+            self.assertLessEqual(sum(c.width for c in nested.columns), doc.tables[0].cell(1, 1).width)
+
     def test_full_document_context_and_schema_contract(self):
         source = source_from_text('ชื่อหลักสูตร\nวัตถุประสงค์\nเข้าใจทีม\nรายละเอียดท้ายเอกสาร')
         prompt = build_prompt(source)
