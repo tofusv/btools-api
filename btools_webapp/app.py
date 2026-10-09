@@ -7,6 +7,8 @@ import tempfile
 import urllib.parse
 import secrets
 import threading
+import base64
+import binascii
 import requests
 from fastapi import FastAPI, Form, Request, HTTPException, Depends, Header
 from fastapi.responses import HTMLResponse, FileResponse
@@ -15,6 +17,15 @@ from typing import Optional
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+
+try:
+    from reference_parser import PLAN_SCHEMA, build_prompt, resolve_plan, source_from_text, validate_source
+except ImportError:
+    from .reference_parser import PLAN_SCHEMA, build_prompt, resolve_plan, source_from_text, validate_source
+try:
+    from source_reader import source_from_docx_bytes, MAX_DOCX_BYTES
+except ImportError:
+    from .source_reader import source_from_docx_bytes, MAX_DOCX_BYTES
 
 try:
     from generate_course_outline import generate_doc
@@ -43,7 +54,7 @@ def get_template_docx_path():
             return path
     return None
 
-def call_gemini_api(raw_text: str, api_key: str) -> dict:
+def call_gemini_api_legacy(raw_text: str, api_key: str) -> dict:
     deadline = time.monotonic() + int(os.getenv("GEMINI_TOTAL_TIMEOUT_SECONDS", "1200"))
     request_timeout = int(os.getenv("GEMINI_REQUEST_TIMEOUT_SECONDS", "180"))
     models_to_try = [
@@ -246,9 +257,70 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
             
     raise ValueError(f"ไม่สามารถประมวลผลด้วย Gemini API ได้ครบทุกโมเดล: {last_error}")
 
+
+def call_gemini_api(raw_text: str, api_key: str, source_document=None) -> dict:
+    mode = os.getenv("BTOOLS_PARSER_MODE", "references").lower()
+    if mode == "legacy":
+        # Emergency compatibility switch, including existing structured clients.
+        return call_gemini_api_legacy(raw_text, api_key)
+    if mode != "references":
+        raise JobProcessingError("BTOOLS_PARSER_MODE must be references or legacy.")
+    source = source_document if source_document is not None else source_from_text(raw_text)
+    prompt = build_prompt(source)
+    keys = list(dict.fromkeys(k.strip() for k in api_key.split(",") if k.strip()))
+    models = [m.strip() for m in os.getenv("GEMINI_MODELS", "gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite").split(",") if m.strip()]
+    deadline = time.monotonic() + int(os.getenv("GEMINI_TOTAL_TIMEOUT_SECONDS", "1200"))
+    request_timeout = int(os.getenv("GEMINI_REQUEST_TIMEOUT_SECONDS", "180"))
+    last_error = "No Gemini key/model configured."
+    for model in models:
+        for key_index, key in enumerate(keys):
+            for attempt in range(2):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise JobProcessingError("Gemini exceeded its processing time budget; retry later.")
+                payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {
+                    "responseMimeType": "application/json", "responseJsonSchema": PLAN_SCHEMA,
+                    "temperature": 0.0,
+                    "maxOutputTokens": int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "8192"))}}
+                try:
+                    response = requests.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                        headers={"x-goog-api-key": key}, json=payload,
+                        timeout=(10, max(1, min(request_timeout, remaining))))
+                except requests.RequestException:
+                    last_error = f"{model}: network request failed."
+                    continue
+                if response.status_code != 200:
+                    last_error = f"{model}: HTTP {response.status_code}."
+                    if response.status_code in (400, 403, 404, 429):
+                        break
+                    if attempt == 0:
+                        time.sleep(min(2, max(0, deadline - time.monotonic())))
+                    continue
+                candidate = (response.json().get("candidates") or [{}])[0]
+                if candidate.get("finishReason") == "MAX_TOKENS":
+                    raise JobProcessingError("Gemini output was truncated; increase its output limit or split the source document.")
+                if candidate.get("finishReason") not in (None, "STOP"):
+                    raise JobProcessingError("Gemini did not complete the structure analysis.")
+                text_out = "".join(p.get("text", "") for p in candidate.get("content", {}).get("parts", []) if not p.get("thought"))
+                try:
+                    plan = json.loads(text_out)
+                except (ValueError, TypeError):
+                    raise JobProcessingError("Gemini returned invalid JSON; original text was not rewritten.")
+                data = resolve_plan(source, plan, apply_edits=os.getenv("BTOOLS_APPLY_TYPO_EDITS", "false").lower() == "true")
+                data["_ai_model_used"] = model
+                data["_keys_loaded"] = len(keys)
+                data["_audit"]["model"] = model
+                usage = response.json().get("usageMetadata", {})
+                data["_audit"]["token_usage"] = {k: v for k, v in usage.items() if type(v) is int}
+                return data
+    raise JobProcessingError(last_error + " Check model access and free-tier quota.")
+
 class FormatTextRequest(BaseModel):
-    raw_text: str
+    raw_text: str = ""
     api_key: Optional[str] = None
+    source_document: Optional[dict] = None
+    source_docx_base64: Optional[str] = None
 
 
 class CreateJobRequest(FormatTextRequest):
@@ -276,26 +348,45 @@ def require_job_token(x_btools_token: Optional[str] = Header(default=None)):
         raise HTTPException(status_code=401, detail="Invalid job API token")
 
 
-def render_background_job(raw_text, api_keys, output_path):
-    data = call_gemini_api(raw_text, api_keys)
+def render_background_job(raw_text, api_keys, output_path, source_document=None):
+    data = call_gemini_api(raw_text, api_keys, source_document) if source_document is not None else call_gemini_api(raw_text, api_keys)
     title = data.get("course_title_en") or data.get("course_title_th") or "Course Outline"
     title = re.sub(r'[\r\n\t/\\:*?"<>|]', ' ', str(title)).replace("หลักสูตร", "").strip()
     title = re.sub(r'\s+', ' ', title)[:160] or "Course Outline"
     generate_doc(data, output_path, template_path=get_template_docx_path())
-    return f"B Tools_{title}.docx", data.get("_ai_model_used", "gemini-unknown")
+    return f"B Tools_{title}.docx", data.get("_ai_model_used", "gemini-unknown"), data.get("_audit")
 
 
 @app.post("/api/jobs", status_code=202, dependencies=[Depends(require_job_token)])
 def create_job(req: CreateJobRequest):
+    if req.source_docx_base64 is not None:
+        if req.source_document is not None or req.raw_text:
+            raise HTTPException(status_code=400, detail="Send DOCX or text/blocks, not both")
+        if len(req.source_docx_base64) > ((MAX_DOCX_BYTES + 2) // 3) * 4:
+            raise HTTPException(status_code=413, detail="DOCX exceeds the 20 MB input limit")
+        try:
+            req.source_document = source_from_docx_bytes(base64.b64decode(req.source_docx_base64, validate=True))
+            req.raw_text = "\n".join(b["text"] for b in req.source_document["blocks"])
+        except (binascii.Error, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid DOCX encoding")
+        except JobProcessingError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     if not req.raw_text.strip():
         raise HTTPException(status_code=400, detail="raw_text is empty")
     if not re.fullmatch(r'[a-zA-Z0-9_-]{1,128}', req.request_id):
         raise HTTPException(status_code=400, detail="Invalid request_id")
+    if req.source_document is not None:
+        try:
+            validate_source(req.source_document)
+            if "\n".join(b["text"] for b in req.source_document["blocks"]).strip() != req.raw_text.strip():
+                raise JobProcessingError("raw_text does not match structured source blocks.")
+        except (JobProcessingError, KeyError, TypeError, AttributeError) as e:
+            raise HTTPException(status_code=400, detail="Invalid structured source: " + (str(e) if isinstance(e, JobProcessingError) else "invalid shape"))
     keys = ",".join(k for k in (req.api_key, os.getenv("GEMINI_API_KEY")) if k)
     if not keys.strip(", "):
         raise HTTPException(status_code=400, detail="Missing Gemini API key")
     try:
-        return get_job_store().submit(req.request_id, req.raw_text, keys, render_background_job)
+        return get_job_store().submit(req.request_id, req.raw_text, keys, render_background_job, source_document=req.source_document)
     except JobConflict as e:
         raise HTTPException(status_code=409, detail=str(e))
     except QueueFull as e:
@@ -322,6 +413,18 @@ def job_result(job_id: str):
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         headers={"X-AI-Model-Used": job["model"] or "gemini-unknown"})
 
+
+@app.get("/api/jobs/{job_id}/audit", dependencies=[Depends(require_job_token)])
+def job_audit(job_id: str):
+    job = job_status(job_id)
+    if job["status"] != "succeeded":
+        raise HTTPException(status_code=409, detail="Audit is not ready")
+    path = get_job_store().result_path(job_id).with_suffix(".audit.json")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Audit not available or storage was reset")
+    return FileResponse(str(path), filename=job["filename"].rsplit(".", 1)[0] + ".review.json",
+                        media_type="application/json")
+
 @app.post("/api/format_text")
 def format_course_text(req: FormatTextRequest):
     try:
@@ -338,7 +441,7 @@ def format_course_text(req: FormatTextRequest):
         if not api_keys_str.strip(", "):
             raise HTTPException(status_code=400, detail="Missing API Key in both Request and Environment")
 
-        data = call_gemini_api(req.raw_text, api_keys_str)
+        data = call_gemini_api(req.raw_text, api_keys_str, req.source_document) if req.source_document is not None else call_gemini_api(req.raw_text, api_keys_str)
         
         title = data.get("course_title_en") or data.get("course_title_th") or "Course Outline"
         title_clean = re.sub(r'[\r\n\t/\\:*?"<>|]', ' ', str(title)).replace("หลักสูตร", "").strip()
@@ -369,7 +472,8 @@ def format_course_text(req: FormatTextRequest):
         
         encoded_filename = urllib.parse.quote(filename)
         headers = {
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+            "X-BTools-Review-Required": str(bool(data.get("_audit", {}).get("review_required"))).lower()
         }
         return FileResponse(
             path=output_filepath,
@@ -411,17 +515,29 @@ def fetch_doc_text(doc_id: str) -> str:
     
     return text
 
+
+def fetch_doc_source(doc_id):
+    response = requests.get(f"https://docs.google.com/document/d/{doc_id}/export?format=docx", timeout=30, allow_redirects=True)
+    if response.status_code != 200 or "accounts.google.com" in response.url.lower():
+        raise ValueError("ไม่สามารถอ่าน Google Doc กรุณาตรวจสิทธิ์การเข้าถึงลิงก์")
+    return source_from_docx_bytes(response.content)
+
 @app.post("/format")
 def format_course(doc_url: str = Form(...)):
     try:
         doc_id = extract_doc_id(doc_url)
-        raw_text = fetch_doc_text(doc_id)
+        source_document = None
+        if os.getenv("BTOOLS_PARSER_MODE", "references").lower() == "legacy":
+            raw_text = fetch_doc_text(doc_id)
+        else:
+            source_document = fetch_doc_source(doc_id)
+            raw_text = "\n".join(b["text"] for b in source_document["blocks"])
         
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise HTTPException(status_code=400, detail="Gemini API Key is missing on the server")
             
-        data = call_gemini_api(raw_text, api_key)
+        data = call_gemini_api(raw_text, api_key, source_document) if source_document is not None else call_gemini_api(raw_text, api_key)
         
         title = data.get("course_title_en") or data.get("course_title_th") or "Course Outline"
         title_clean = re.sub(r'[\r\n\t/\\:*?"<>|]', ' ', str(title)).replace("หลักสูตร", "").strip()
@@ -452,7 +568,8 @@ def format_course(doc_url: str = Form(...)):
         
         encoded_filename = urllib.parse.quote(filename)
         headers = {
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+            "X-BTools-Review-Required": str(bool(data.get("_audit", {}).get("review_required"))).lower()
         }
         return FileResponse(
             path=output_filepath,

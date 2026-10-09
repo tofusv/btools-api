@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8')
+  .replace('const USE_REFERENCE_SOURCE = true;', 'var USE_REFERENCE_SOURCE = false;')
   .replaceAll('YOUR_INPUT_FOLDER_ID_HERE', 'input')
   .replaceAll('YOUR_OUTPUT_FOLDER_ID_HERE', 'output')
   .replaceAll('YOUR_RENDER_APP_NAME', 'test')
@@ -31,7 +32,7 @@ function fixture(text = 'large source') {
     }};
   function response(code, data) {
     return {getResponseCode: () => code, getContentText: () => JSON.stringify(data),
-      getBlob: () => ({name: '', setName(n) {this.name = n; return this;}})};
+      getBlob: () => ({name: '', getBytes: () => [80, 75, 3, 4], setName(n) {this.name = n; return this;}})};
   }
   const f = {input, output, requests, logs, state, props, response, outputFolder,
     handler: (url, options) => response(options.method === 'post' ? 202 : 200,
@@ -44,7 +45,8 @@ function fixture(text = 'large source') {
     DriveApp: {getFolderById: id => id === 'input' ? {getFiles: () => iterator([input])} : outputFolder,
       getFileById: id => id === 'input-file' ? input : output.find(o => o.getId() === id)},
     DocumentApp: {openById: () => ({getBody: () => ({getText: () => text})})},
-    Utilities: {getUuid: () => 'request-' + ++counter},
+    Utilities: {getUuid: () => 'request-' + ++counter, base64Encode: bytes => Buffer.from(bytes).toString('base64')},
+    ScriptApp: {getOAuthToken: () => 'dummy-oauth-token'},
     UrlFetchApp: {fetch: (url, options) => {requests.push({url, options}); return f.handler(url, options);}}
   };
   vm.createContext(context); vm.runInContext(source, context);
@@ -55,6 +57,37 @@ function fixture(text = 'large source') {
 }
 
 const tests = {
+  'new Google Docs path exports DOCX and sends binary source instead of flattened text'() {
+    const f = fixture(); f.context.USE_REFERENCE_SOURCE = true;
+    f.handler = (url, options) => url.includes('/export?') ? f.response(200, {}) : f.response(202, {id: 'job-one', status: 'queued'});
+    f.run();
+    assert.equal(f.requests.length, 2);
+    assert.equal(f.requests[0].options.headers.Authorization, 'Bearer dummy-oauth-token');
+    const sent = JSON.parse(f.requests[1].options.payload);
+    assert.equal(sent.source_docx_base64, 'UEsDBA==');
+    assert.equal(sent.raw_text, undefined);
+  },
+  'review result saves audit and marks REVIEW without reprocessing'() {
+    const f = fixture(); f.run();
+    f.handler = url => /\/(result|audit)$/.test(url) ? f.response(200, {}) :
+      f.response(200, {status: 'succeeded', filename: 'B Tools_Test.docx', audit_available: true, review_required: true});
+    f.run(); f.run();
+    assert.equal(f.output.length, 2);
+    assert.equal(f.input.getName(), '[REVIEW]_Course.docx');
+    assert.equal(f.output.filter(o => o.getName().endsWith('.review.json')).length, 1);
+    assert.equal(f.requests.filter(r => r.options.method === 'post').length, 1);
+  },
+  'audit save interrupted before state update recovers without duplicate report'() {
+    const f = fixture(); f.run();
+    f.handler = url => /\/(result|audit)$/.test(url) ? f.response(200, {}) :
+      f.response(200, {status: 'succeeded', filename: 'B Tools_Test.docx', audit_available: true, review_required: true});
+    const save = f.props.setProperty;
+    f.props.setProperty = (k, value) => {if (JSON.parse(value).auditFileId) throw new Error('stop after audit creation'); save(k, value);};
+    f.run(); assert.equal(f.output.length, 1);
+    f.props.setProperty = save; f.run();
+    assert.equal(f.output.length, 2);
+    assert.equal(f.input.getName(), '[REVIEW]_Course.docx');
+  },
   'long job is submitted once and polled on later runs'() {
     const f = fixture('large text '.repeat(10000));
     f.run(); f.run(); f.run();

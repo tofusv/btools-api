@@ -286,8 +286,11 @@
                 a.remove();
                 window.URL.revokeObjectURL(downloadUrl);
 
-                statusCard.className = 'status-card success';
-                statusCard.textContent = `✅ จัดหน้าและดาวน์โหลดไฟล์ "${filename}" สำเร็จเรียบร้อยแล้ว!`;
+                const reviewRequired = response.headers.get('X-BTools-Review-Required') === 'true';
+                statusCard.className = reviewRequired ? 'status-card error' : 'status-card success';
+                statusCard.textContent = reviewRequired
+                    ? `สร้างไฟล์ "${filename}" แล้ว กรุณาตรวจรายการที่ต้องตรวจสอบท้ายเอกสารก่อนนำไปใช้`
+                    : `✅ จัดหน้าและดาวน์โหลดไฟล์ "${filename}" สำเร็จเรียบร้อยแล้ว!`;
                 statusCard.style.display = 'block';
 
             } catch (err) {

@@ -11,6 +11,8 @@ const MAX_NEW_FILES = 1;
 const MAX_ACTIVE_FILES = 2;
 const MAX_JOB_WAIT_MS = 90 * 60 * 1000;
 const JOB_PROPERTY_PREFIX = "BTOOLS_JOB_";
+// Set false only while using the original server before installing this update.
+const USE_REFERENCE_SOURCE = true;
 
 function cleanFolderId(idStr) {
   return idStr ? idStr.trim().split('/folders/').pop().split('?')[0].split('/')[0].trim() : '';
@@ -58,6 +60,27 @@ function readSourceText(file) {
   if (file.getMimeType() === MimeType.GOOGLE_DOCS) return DocumentApp.openById(file.getId()).getBody().getText();
   return extractTextFromDocxBlob(file.getBlob());
 }
+function readSourcePayload(file) {
+  if (!USE_REFERENCE_SOURCE) return {raw_text: readSourceText(file)};
+  var blob;
+  if (file.getMimeType() === MimeType.GOOGLE_DOCS) {
+    var response = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' +
+      encodeURIComponent(file.getId()) + '/export?mimeType=' +
+      encodeURIComponent('application/vnd.openxmlformats-officedocument.wordprocessingml.document'), {
+        headers: {Authorization: 'Bearer ' + ScriptApp.getOAuthToken()}, muteHttpExceptions: true});
+    if (response.getResponseCode() !== 200) throw new Error('Export Google Doc HTTP ' + response.getResponseCode());
+    blob = response.getBlob();
+  } else {
+    var mime = file.getMimeType();
+    if (mime !== 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' && !/\.docx$/i.test(file.getName())) {
+      throw new Error('รองรับเฉพาะ Google Docs และ .docx');
+    }
+    blob = file.getBlob();
+  }
+  var bytes = blob.getBytes();
+  if (bytes.length > 20 * 1024 * 1024) throw new Error('ต้นฉบับเกินขนาด 20 MB');
+  return {source_docx_base64: Utilities.base64Encode(bytes)};
+}
 function saveState(fileId, state) {
   PropertiesService.getScriptProperties().setProperty(JOB_PROPERTY_PREFIX + fileId, JSON.stringify(state));
 }
@@ -70,14 +93,16 @@ function retryFile(file, state, reason) {
   deleteState(file.getId());
 }
 function submitFile(file, state) {
-  var rawText = readSourceText(file);
-  if (!rawText || !rawText.trim()) {
+  var payload = readSourcePayload(file);
+  if (payload.raw_text !== undefined && !payload.raw_text.trim()) {
     file.setName('[SKIP]_' + state.originalName.replace(/^\[RETRY_\d+\]_/, ''));
     deleteState(file.getId());
     Logger.log('ไฟล์ว่างหรืออ่านเนื้อหาไม่ได้: ' + state.originalName);
     return;
   }
-  var response = jobRequest('/api/jobs', {raw_text: rawText, api_key: GEMINI_API_KEY, request_id: state.requestId});
+  payload.api_key = GEMINI_API_KEY;
+  payload.request_id = state.requestId;
+  var response = jobRequest('/api/jobs', payload);
   var code = response.getResponseCode();
   if (code === 202) {
     var job = JSON.parse(response.getContentText());
@@ -94,6 +119,26 @@ function submitFile(file, state) {
   } else { retryFile(file, state, 'รับงานไม่สำเร็จ HTTP ' + code); }
 }
 function finishFile(file, state, outputFolder, job) {
+  state.reviewRequired = state.reviewRequired || !!job.review_required;
+  state.auditRequired = state.auditRequired || !!job.audit_available;
+  state.filename = job.filename || state.filename || 'B Tools_Course_Outline.docx';
+  saveState(file.getId(), state);
+  if (state.auditRequired) {
+    var auditMarker = '__BTOOLS_JOB_' + state.jobId + '.review.json';
+    var auditFile = state.auditFileId ? DriveApp.getFileById(state.auditFileId) : null;
+    if (!auditFile) {
+      var auditMatches = outputFolder.getFilesByName(auditMarker);
+      if (auditMatches.hasNext()) auditFile = auditMatches.next();
+    }
+    if (!auditFile) {
+      var auditResponse = jobRequest('/api/jobs/' + encodeURIComponent(state.jobId) + '/audit');
+      if (auditResponse.getResponseCode() !== 200) throw new Error('ดาวน์โหลดรายงานตรวจสอบ HTTP ' + auditResponse.getResponseCode());
+      auditFile = outputFolder.createFile(auditResponse.getBlob().setName(auditMarker));
+    }
+    state.auditFileId = auditFile.getId();
+    saveState(file.getId(), state);
+    auditFile.setName(state.filename.replace(/\.docx$/i, '') + '.review.json');
+  }
   var markerName = '__BTOOLS_JOB_' + state.jobId + '.docx';
   var outputFile = state.outputFileId ? DriveApp.getFileById(state.outputFileId) : null;
   if (!outputFile) {
@@ -111,11 +156,11 @@ function finishFile(file, state, outputFolder, job) {
     outputFile = outputFolder.createFile(response.getBlob().setName(markerName));
   }
   state.outputFileId = outputFile.getId();
-  state.filename = job.filename || state.filename || 'B Tools_Course_Outline.docx';
   saveState(file.getId(), state); // Persist identity BEFORE renaming output.
   outputFile.setName(state.filename);
-  outputFile.setDescription('B Tools job: ' + state.jobId + ' | Source: ' + file.getId());
-  file.setName('[DONE]_' + state.originalName.replace(/^\[RETRY_\d+\]_/, ''));
+  outputFile.setDescription('B Tools job: ' + state.jobId + ' | Source: ' + file.getId() +
+    (state.reviewRequired ? ' | REVIEW REQUIRED: ตรวจรายงานท้ายเอกสารและ .review.json' : ''));
+  file.setName((state.reviewRequired ? '[REVIEW]_' : '[DONE]_') + state.originalName.replace(/^\[RETRY_\d+\]_/, ''));
   deleteState(file.getId());
   Logger.log('บันทึกสำเร็จ: ' + state.filename + ' | ' + (job.model || 'unknown'));
 }
@@ -170,7 +215,8 @@ function processNewCourseOutlines() {
     while (files.hasNext() && submitted < MAX_NEW_FILES && activeCount < MAX_ACTIVE_FILES) {
       if (Date.now() - started >= RUN_BUDGET_MS) break;
       var file = files.next(), name = file.getName();
-      if (properties.getProperty(JOB_PROPERTY_PREFIX + file.getId()) || /^\[(DONE|SKIP|PROCESSING)\]_/.test(name)) continue;
+      if (properties.getProperty(JOB_PROPERTY_PREFIX + file.getId()) || /^\[(DONE|SKIP|PROCESSING|REVIEW)\]_/.test(name)) continue;
+      if (file.getMimeType() !== MimeType.GOOGLE_DOCS && !/\.docx$/i.test(name)) continue;
       var state = {originalName: name, requestId: Utilities.getUuid(), startedAt: Date.now()};
       saveState(file.getId(), state); // BEFORE rename, extraction, and HTTP.
       activeCount++;

@@ -4,6 +4,7 @@ Input text and Gemini keys stay in worker memory. Interrupted jobs become failed
 on restart so the Drive client can retry instead of waiting forever.
 """
 import hashlib
+import json
 import logging
 import sqlite3
 import threading
@@ -41,6 +42,11 @@ class JobStore:
                 created REAL NOT NULL, updated REAL NOT NULL,
                 filename TEXT, model TEXT, error TEXT
             )""")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+            if "review_required" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN review_required INTEGER NOT NULL DEFAULT 0")
+            if "audit_available" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN audit_available INTEGER NOT NULL DEFAULT 0")
             db.execute("""UPDATE jobs SET status='failed', updated=?,
                 error='Server restarted during processing; submit a new request.'
                 WHERE status IN ('queued', 'processing')""", (time.time(),))
@@ -57,9 +63,11 @@ class JobStore:
 
     @staticmethod
     def _public(row):
-        return {key: row[key] for key in (
+        public = {key: row[key] for key in (
             "id", "status", "created", "updated", "filename", "model", "error"
         )}
+        public.update(review_required=bool(row["review_required"]), audit_available=bool(row["audit_available"]))
+        return public
 
     def get(self, job_id):
         with self._connect() as db:
@@ -71,8 +79,10 @@ class JobStore:
         canonical = str(uuid.UUID(job_id))
         return self.directory / (canonical + ".docx")
 
-    def submit(self, request_id, raw_text, api_keys, render):
-        digest = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+    def submit(self, request_id, raw_text, api_keys, render, source_document=None):
+        content = raw_text if source_document is None else json.dumps(
+            {"raw_text": raw_text, "source_document": source_document}, sort_keys=True, ensure_ascii=False)
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         with self.lock:
             self.cleanup()
             with self._connect() as db:
@@ -89,28 +99,34 @@ class JobStore:
                 db.execute("INSERT INTO jobs (id,request_id,digest,status,created,updated) VALUES (?,?,?,'queued',?,?)",
                            (job_id, request_id, digest, now, now))
             try:
-                self.executor.submit(self._run, job_id, raw_text, api_keys, render)
+                self.executor.submit(self._run, job_id, raw_text, api_keys, render, source_document)
             except RuntimeError:
                 self._update(job_id, "failed", error="Worker is shutting down; submit a new request.")
             return self.get(job_id)
 
-    def _update(self, job_id, status, filename=None, model=None, error=None):
+    def _update(self, job_id, status, filename=None, model=None, error=None, review_required=False, audit_available=False):
         with self._connect() as db:
-            db.execute("UPDATE jobs SET status=?,updated=?,filename=?,model=?,error=? WHERE id=?",
-                       (status, time.time(), filename, model, error, job_id))
+            db.execute("UPDATE jobs SET status=?,updated=?,filename=?,model=?,error=?,review_required=?,audit_available=? WHERE id=?",
+                       (status, time.time(), filename, model, error, int(review_required), int(audit_available), job_id))
 
-    def _run(self, job_id, raw_text, api_keys, render):
+    def _run(self, job_id, raw_text, api_keys, render, source_document=None):
         self._update(job_id, "processing")
         path = self.result_path(job_id)
         try:
-            filename, model = render(raw_text, api_keys, str(path))
+            result = render(raw_text, api_keys, str(path), source_document) if source_document is not None else render(raw_text, api_keys, str(path))
+            filename, model = result[:2]
+            audit = result[2] if len(result) > 2 else None
             if not path.is_file() or path.stat().st_size == 0:
                 raise ValueError("No document produced")
-            self._update(job_id, "succeeded", filename=filename, model=model)
+            if audit is not None:
+                path.with_suffix(".audit.json").write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._update(job_id, "succeeded", filename=filename, model=model,
+                         review_required=bool(audit and audit.get("review_required")), audit_available=audit is not None)
         except Exception as exc:
             # Do not return exceptions containing Gemini request URLs/API keys.
             logging.error("Course job %s failed; see formatter logs", job_id)
             path.unlink(missing_ok=True)
+            path.with_suffix(".audit.json").unlink(missing_ok=True)
             message = str(exc) if isinstance(exc, JobProcessingError) else "AI/document generation failed; check Render logs and retry."
             self._update(job_id, "failed", error=message)
 
@@ -120,6 +136,7 @@ class JobStore:
                               (time.time() - retention_seconds,)).fetchall()
             for row in rows:
                 self.result_path(row["id"]).unlink(missing_ok=True)
+                self.result_path(row["id"]).with_suffix(".audit.json").unlink(missing_ok=True)
                 db.execute("DELETE FROM jobs WHERE id=?", (row["id"],))
 
     def close(self):

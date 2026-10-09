@@ -524,6 +524,16 @@ def generate_doc(data, output_path, template_path=None):
     fix_footer_page_number(doc)
     sanitize_pgmar(doc)
 
+    if data.get("_reference_document"):
+        try:
+            from reference_renderer import render_reference_document
+        except ImportError:
+            from .reference_renderer import render_reference_document
+        render_reference_document(doc, data["_reference_document"], sys.modules[__name__])
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        doc.save(output_path)
+        return
+
     # Title TH (H1: 13pt Bold)
     if data.get("course_title_th"):
         p = doc.add_paragraph()
