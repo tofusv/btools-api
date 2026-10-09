@@ -7,6 +7,9 @@ const GEMINI_API_KEY = "YOUR_NEW_GEMINI_API_KEY_HERE";
 // Set the same private value as BTOOLS_API_TOKEN in Render Environment.
 const BTOOLS_API_TOKEN = "YOUR_PRIVATE_JOB_TOKEN_HERE";
 const RUN_BUDGET_MS = 120000;
+const HTTP_TIMEOUT_SECONDS = 60;
+const RUN_RESERVE_MS = 15000;
+var runDeadlineMs = 0;
 const MAX_NEW_FILES = 1;
 const MAX_ACTIVE_FILES = 2;
 const MAX_JOB_WAIT_MS = 90 * 60 * 1000;
@@ -20,6 +23,27 @@ function cleanFolderId(idStr) {
 function apiBaseUrl() {
   return RENDER_API_URL.replace(/\/+$/, '').replace(/\/api\/(format_text|jobs)$/, '');
 }
+function boundedFetch(url, options, operation) {
+  var remaining = runDeadlineMs ? runDeadlineMs - Date.now() - RUN_RESERVE_MS : RUN_BUDGET_MS - RUN_RESERVE_MS;
+  var seconds = Math.min(HTTP_TIMEOUT_SECONDS, Math.floor(remaining / 1000));
+  if (seconds < 5) throw new Error('BTOOLS_DEFER: รอทำต่อรอบถัดไป');
+  options.timeoutSeconds = seconds;
+  var started = Date.now();
+  Logger.log('HTTP start | ' + operation + ' | timeoutSeconds=' + seconds);
+  try {
+    var response = UrlFetchApp.fetch(url, options);
+    Logger.log('HTTP end | ' + operation + ' | status=' + response.getResponseCode() + ' | elapsedMs=' + (Date.now() - started));
+    return response;
+  } catch (e) {
+    Logger.log('HTTP interrupted | ' + operation + ' | elapsedMs=' + (Date.now() - started));
+    throw e;
+  }
+}
+function checkpoint(file, state, operation) {
+  state.lastOperation = operation;
+  state.lastOperationAt = Date.now();
+  saveState(file.getId(), state);
+}
 function jobRequest(path, payload) {
   var options = {method: payload ? 'post' : 'get',
     headers: {'X-BTools-Token': BTOOLS_API_TOKEN}, muteHttpExceptions: true};
@@ -27,7 +51,8 @@ function jobRequest(path, payload) {
     options.contentType = 'application/json';
     options.payload = JSON.stringify(payload);
   }
-  return UrlFetchApp.fetch(apiBaseUrl() + path, options);
+  return boundedFetch(apiBaseUrl() + path, options,
+    payload ? 'job_submit' : (path.endsWith('/audit') ? 'job_audit' : (path.endsWith('/result') ? 'job_result' : 'job_status')));
 }
 function extractTextFromDocxBlob(blob) {
   var parts = Utilities.unzip(blob.setContentType('application/zip'));
@@ -64,10 +89,10 @@ function readSourcePayload(file) {
   if (!USE_REFERENCE_SOURCE) return {raw_text: readSourceText(file)};
   var blob;
   if (file.getMimeType() === MimeType.GOOGLE_DOCS) {
-    var response = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' +
+    var response = boundedFetch('https://www.googleapis.com/drive/v3/files/' +
       encodeURIComponent(file.getId()) + '/export?mimeType=' +
       encodeURIComponent('application/vnd.openxmlformats-officedocument.wordprocessingml.document'), {
-        headers: {Authorization: 'Bearer ' + ScriptApp.getOAuthToken()}, muteHttpExceptions: true});
+        headers: {Authorization: 'Bearer ' + ScriptApp.getOAuthToken()}, muteHttpExceptions: true}, 'source_export');
     if (response.getResponseCode() !== 200) throw new Error('Export Google Doc HTTP ' + response.getResponseCode());
     blob = response.getBlob();
   } else {
@@ -93,6 +118,7 @@ function retryFile(file, state, reason) {
   deleteState(file.getId());
 }
 function submitFile(file, state) {
+  checkpoint(file, state, 'source_read');
   var payload = readSourcePayload(file);
   if (payload.raw_text !== undefined && !payload.raw_text.trim()) {
     file.setName('[SKIP]_' + state.originalName.replace(/^\[RETRY_\d+\]_/, ''));
@@ -102,6 +128,7 @@ function submitFile(file, state) {
   }
   payload.api_key = GEMINI_API_KEY;
   payload.request_id = state.requestId;
+  checkpoint(file, state, 'job_submit');
   var response = jobRequest('/api/jobs', payload);
   var code = response.getResponseCode();
   if (code === 202) {
@@ -127,6 +154,7 @@ function finishFile(file, state, outputFolder, job) {
     var auditMarker = '__BTOOLS_JOB_' + state.jobId + '.review.json';
     var auditFile = state.auditFileId ? DriveApp.getFileById(state.auditFileId) : null;
     if (!auditFile) {
+      checkpoint(file, state, 'job_audit');
       var auditMatches = outputFolder.getFilesByName(auditMarker);
       if (auditMatches.hasNext()) auditFile = auditMatches.next();
     }
@@ -142,6 +170,7 @@ function finishFile(file, state, outputFolder, job) {
   var markerName = '__BTOOLS_JOB_' + state.jobId + '.docx';
   var outputFile = state.outputFileId ? DriveApp.getFileById(state.outputFileId) : null;
   if (!outputFile) {
+    checkpoint(file, state, 'job_result');
     // Recover a file created just before a hard timeout, without saving twice.
     var matches = outputFolder.getFilesByName(markerName);
     if (matches.hasNext()) outputFile = matches.next();
@@ -171,6 +200,7 @@ function checkFile(file, state, outputFolder) {
     else submitFile(file, state); // Same requestId prevents duplicate work.
     return;
   }
+  checkpoint(file, state, 'job_status');
   var response = jobRequest('/api/jobs/' + encodeURIComponent(state.jobId));
   var code = response.getResponseCode();
   if (code === 404) { retryFile(file, state, 'เซิร์ฟเวอร์ไม่พบงานเดิม'); return; }
@@ -187,6 +217,7 @@ function processNewCourseOutlines() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) return Logger.log('รอบก่อนยังทำงานอยู่ ข้ามรอบนี้');
   var started = Date.now();
+  runDeadlineMs = started + RUN_BUDGET_MS;
   try {
     var inputId = cleanFolderId(INPUT_FOLDER_ID), outputId = cleanFolderId(OUTPUT_FOLDER_ID);
     if (!inputId || !outputId || inputId.indexOf('YOUR_') === 0 || outputId.indexOf('YOUR_') === 0 ||
@@ -226,7 +257,7 @@ function processNewCourseOutlines() {
         submitFile(file, state);
       } catch (e) { Logger.log('ส่งงานยังไม่สำเร็จ เก็บรหัสเดิมไว้ลองใหม่: ' + e.toString()); }
     }
-  } finally { lock.releaseLock(); }
+  } finally { runDeadlineMs = 0; lock.releaseLock(); }
 }
 /** Run once AFTER both updates to recover old orphaned PROCESSING files. */
 function recoverStuckFiles() {

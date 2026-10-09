@@ -95,13 +95,11 @@ def render_reference_document(doc, payload, fmt):
         return p
 
     def prepare_table(container, rows, cols, widths=None):
-        if container is doc:
-            table = container.add_table(rows=rows, cols=cols)
-        else:
-            table = container.add_table(rows=rows, cols=cols, width=Inches(6.1))
+        # Both Document and _Cell take rows/cols; _Cell rejects width.
+        table = container.add_table(rows=rows, cols=cols)
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
         table.autofit = False
-        available = 6.1 if container is not doc else 6.65
+        available = (container.width.inches if container.width else 6.1) if container is not doc else 6.65
         fmt.set_table_col_widths(table, widths or [available / cols] * cols)
         for row in table.rows:
             for cell in row.cells:

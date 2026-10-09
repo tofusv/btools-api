@@ -15,7 +15,7 @@ function iterator(items) {
   return {hasNext: () => index < items.length, next: () => items[index++]};
 }
 function fixture(text = 'large source') {
-  let name = 'Course.docx', counter = 0, locked = false;
+  let name = 'Course.docx', counter = 0, locked = false, now = 1000000;
   const state = {}, output = [], requests = [], logs = [];
   const input = {getId: () => 'input-file', getName: () => name,
     setName: n => {name = n;}, getMimeType: () => 'google-doc', isTrashed: () => false};
@@ -35,9 +35,11 @@ function fixture(text = 'large source') {
       getBlob: () => ({name: '', getBytes: () => [80, 75, 3, 4], setName(n) {this.name = n; return this;}})};
   }
   const f = {input, output, requests, logs, state, props, response, outputFolder,
+    advance: ms => {now += ms;},
     handler: (url, options) => response(options.method === 'post' ? 202 : 200,
       {id: 'job-one', status: options.method === 'post' ? 'queued' : 'processing'})};
   const context = {
+    Date: {now: () => now},
     Logger: {log: value => logs.push(value)}, MimeType: {GOOGLE_DOCS: 'google-doc'},
     PropertiesService: {getScriptProperties: () => props},
     LockService: {getScriptLock: () => ({tryLock: () => {if (locked) return false; locked = true; return true;},
@@ -57,6 +59,46 @@ function fixture(text = 'large source') {
 }
 
 const tests = {
+  'every fetch including Google export uses a bounded timeout'() {
+    const f = fixture(); f.context.USE_REFERENCE_SOURCE = true;
+    f.handler = (url, options) => url.includes('/export?') ? f.response(200, {}) : f.response(202, {id: 'job-one'});
+    f.run(); f.run();
+    for (const request of f.requests) assert.equal(request.options.timeoutSeconds, 60);
+  },
+  'source export consumes budget and shortens the submit timeout'() {
+    const f = fixture(); f.context.USE_REFERENCE_SOURCE = true;
+    f.handler = url => {if (url.includes('/export?')) {f.advance(70000); return f.response(200, {});}
+      return f.response(202, {id: 'job-one'});};
+    f.run();
+    assert.equal(f.requests[1].options.timeoutSeconds, 35);
+  },
+  'fetch timeout preserves request identity and checkpoint for the next run'() {
+    const f = fixture(); let calls = 0;
+    f.handler = () => {if (++calls === 1) {f.advance(60000); throw new Error('request timeout');}
+      return f.response(202, {id: 'job-one'});};
+    f.run();
+    const saved = JSON.parse(f.state.BTOOLS_JOB_input_file || f.state['BTOOLS_JOB_input-file']);
+    assert.equal(saved.lastOperation, 'job_submit');
+    f.run();
+    assert.equal(JSON.parse(f.requests[1].options.payload).request_id, saved.requestId);
+    assert.equal(f.input.getName(), '[PROCESSING]_Course.docx');
+  },
+  'audit download near deadline defers result and resumes without duplicate audit'() {
+    const f = fixture(); f.run();
+    f.handler = url => {
+      if (url.endsWith('/audit')) {f.advance(104000); return f.response(200, {});}
+      return /\/result$/.test(url) ? f.response(200, {}) :
+        f.response(200, {status: 'succeeded', filename: 'Test.docx', audit_available: true});
+    };
+    f.run();
+    assert.equal(f.output.length, 1);
+    assert.equal(f.requests.filter(r => r.url.endsWith('/result')).length, 0);
+    assert.ok(JSON.parse(f.state['BTOOLS_JOB_input-file']).auditFileId);
+    f.run();
+    assert.equal(f.output.length, 2);
+    assert.equal(f.requests.filter(r => r.url.endsWith('/audit')).length, 1);
+    assert.equal(f.input.getName(), '[DONE]_Course.docx');
+  },
   'new Google Docs path exports DOCX and sends binary source instead of flattened text'() {
     const f = fixture(); f.context.USE_REFERENCE_SOURCE = true;
     f.handler = (url, options) => url.includes('/export?') ? f.response(200, {}) : f.response(202, {id: 'job-one', status: 'queued'});
