@@ -5,8 +5,10 @@ import json
 import time
 import tempfile
 import urllib.parse
+import secrets
+import threading
 import requests
-from fastapi import FastAPI, Form, Request, HTTPException
+from fastapi import FastAPI, Form, Request, HTTPException, Depends, Header
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -18,6 +20,11 @@ try:
     from generate_course_outline import generate_doc
 except ImportError:
     from .generate_course_outline import generate_doc
+
+try:
+    from job_store import JobStore, JobConflict, QueueFull, JobProcessingError
+except ImportError:
+    from .job_store import JobStore, JobConflict, QueueFull, JobProcessingError
 
 app = FastAPI(title="B Tools Course Outline Formatter", version="1.0.0")
 
@@ -37,6 +44,8 @@ def get_template_docx_path():
     return None
 
 def call_gemini_api(raw_text: str, api_key: str) -> dict:
+    deadline = time.monotonic() + int(os.getenv("GEMINI_TOTAL_TIMEOUT_SECONDS", "1200"))
+    request_timeout = int(os.getenv("GEMINI_REQUEST_TIMEOUT_SECONDS", "180"))
     models_to_try = [
         "gemini-3.6-flash",
         "gemini-3.5-flash",
@@ -175,17 +184,23 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
                 "generationConfig": {
                     "responseMimeType": "application/json",
                     "temperature": 0.0,
-                    "maxOutputTokens": 8192
+                    "maxOutputTokens": int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "8192"))
                 }
             }
             
             for attempt in range(2): # ลองใหม่สูงสุด 2 ครั้งต่อ Key
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise JobProcessingError("Gemini exceeded its processing time budget; retry or split the source document.")
                 try:
                     print(f"กำลังส่งข้อมูลหา {model} (Key {key_idx+1}/{len(api_keys_list)} - ครั้งที่ {attempt+1})...")
-                    response = requests.post(url, json=payload, timeout=60)
+                    response = requests.post(url, json=payload, timeout=(10, max(1, min(request_timeout, remaining))))
                     
                     if response.status_code == 200:
                         data = response.json()
+                        candidate = (data.get("candidates") or [{}])[0]
+                        if candidate.get("finishReason") == "MAX_TOKENS":
+                            raise JobProcessingError("Gemini output was truncated. Increase GEMINI_MAX_OUTPUT_TOKENS within the model's limit, or split the source document.")
                         text_out = data["candidates"][0]["content"]["parts"][0]["text"]
                         
                         # ลบ Markdown backticks เผื่อ AI ตอบกลับมาพร้อมฟอร์แมต
@@ -221,6 +236,8 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
                         print(f"เกิดข้อผิดพลาดกับ {model} ({response.status_code}): รอ 8 วินาทีแล้วลองใหม่... - {error_msg}")
                         time.sleep(8)
                         
+                except JobProcessingError:
+                    raise
                 except Exception as e:
                     print(f"Exception with {model} Key {key_idx+1}: {e}")
                     last_error = str(e)
@@ -232,6 +249,78 @@ def call_gemini_api(raw_text: str, api_key: str) -> dict:
 class FormatTextRequest(BaseModel):
     raw_text: str
     api_key: Optional[str] = None
+
+
+class CreateJobRequest(FormatTextRequest):
+    request_id: str
+
+
+_job_store = None
+_job_store_lock = threading.Lock()
+
+
+def get_job_store():
+    global _job_store
+    with _job_store_lock:
+        if _job_store is None:
+            directory = os.getenv("BTOOLS_JOB_DIR", os.path.join(os.path.dirname(__file__), "job_data"))
+            _job_store = JobStore(directory)
+        return _job_store
+
+
+def require_job_token(x_btools_token: Optional[str] = Header(default=None)):
+    expected = os.getenv("BTOOLS_API_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=503, detail="Configure BTOOLS_API_TOKEN on Render first")
+    if not x_btools_token or not secrets.compare_digest(x_btools_token.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Invalid job API token")
+
+
+def render_background_job(raw_text, api_keys, output_path):
+    data = call_gemini_api(raw_text, api_keys)
+    title = data.get("course_title_en") or data.get("course_title_th") or "Course Outline"
+    title = re.sub(r'[\r\n\t/\\:*?"<>|]', ' ', str(title)).replace("หลักสูตร", "").strip()
+    title = re.sub(r'\s+', ' ', title)[:160] or "Course Outline"
+    generate_doc(data, output_path, template_path=get_template_docx_path())
+    return f"B Tools_{title}.docx", data.get("_ai_model_used", "gemini-unknown")
+
+
+@app.post("/api/jobs", status_code=202, dependencies=[Depends(require_job_token)])
+def create_job(req: CreateJobRequest):
+    if not req.raw_text.strip():
+        raise HTTPException(status_code=400, detail="raw_text is empty")
+    if not re.fullmatch(r'[a-zA-Z0-9_-]{1,128}', req.request_id):
+        raise HTTPException(status_code=400, detail="Invalid request_id")
+    keys = ",".join(k for k in (req.api_key, os.getenv("GEMINI_API_KEY")) if k)
+    if not keys.strip(", "):
+        raise HTTPException(status_code=400, detail="Missing Gemini API key")
+    try:
+        return get_job_store().submit(req.request_id, req.raw_text, keys, render_background_job)
+    except JobConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except QueueFull as e:
+        raise HTTPException(status_code=429, detail=str(e))
+
+
+@app.get("/api/jobs/{job_id}", dependencies=[Depends(require_job_token)])
+def job_status(job_id: str):
+    job = get_job_store().get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found; server storage may have restarted")
+    return job
+
+
+@app.get("/api/jobs/{job_id}/result", dependencies=[Depends(require_job_token)])
+def job_result(job_id: str):
+    job = job_status(job_id)
+    if job["status"] != "succeeded":
+        raise HTTPException(status_code=409, detail="Document is not ready")
+    path = get_job_store().result_path(job_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Result expired or server storage was reset")
+    return FileResponse(path=str(path), filename=job["filename"],
+                        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        headers={"X-AI-Model-Used": job["model"] or "gemini-unknown"})
 
 @app.post("/api/format_text")
 def format_course_text(req: FormatTextRequest):
