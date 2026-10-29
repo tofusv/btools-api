@@ -9,6 +9,8 @@ import secrets
 import threading
 import base64
 import binascii
+import random
+from pathlib import Path
 import requests
 from fastapi import FastAPI, Form, Request, HTTPException, Depends, Header
 from fastapi.responses import HTMLResponse, FileResponse
@@ -337,16 +339,23 @@ def call_gemini_api(raw_text: str, api_key: str, source_document=None) -> dict:
                     failure = {"model": model, "attempt": attempt + 1, "code": "network_error", "exception_type": type(exc).__name__}
                     failed_attempts.append(failure)
                     job_event("gemini_attempt_failed", **failure)
+                    if attempt == 0:
+                        time.sleep(min(2 + random.random(), max(0, deadline - time.monotonic())))
                     continue
                 if response.status_code != 200:
                     last_error = f"{model}: HTTP {response.status_code}."
                     failure = {"model": model, "attempt": attempt + 1, "code": "http_error", "http_status": response.status_code}
                     failed_attempts.append(failure)
                     job_event("gemini_attempt_failed", **failure)
-                    if response.status_code in (400, 403, 404, 429):
+                    if response.status_code in (400, 401, 403, 404, 429):
                         break
                     if attempt == 0:
-                        time.sleep(min(2, max(0, deadline - time.monotonic())))
+                        retry_after = getattr(response, "headers", {}).get("Retry-After", "0")
+                        try:
+                            delay = min(60, max(2, float(retry_after)))
+                        except (ValueError, TypeError):
+                            delay = 2
+                        time.sleep(min(delay + random.random(), max(0, deadline - time.monotonic())))
                     continue
                 try:
                     with job_stage("response_decode"):
@@ -371,8 +380,16 @@ def call_gemini_api(raw_text: str, api_key: str, source_document=None) -> dict:
                 data["_audit"]["failed_attempts"] = failed_attempts
                 job_event("gemini_plan_accepted", model=model, failed_attempts=len(failed_attempts))
                 return data
+    statuses = {a.get("http_status") for a in failed_attempts}
+    failure_code = "analysis_exhausted"
+    if failed_attempts and statuses <= {400, 401, 403, 404}:
+        failure_code = "configuration_error"
+    elif 429 in statuses:
+        failure_code = "quota_exhausted"
+    elif failed_attempts and all(a["code"] in ("http_error", "network_error") for a in failed_attempts):
+        failure_code = "provider_unavailable"
     raise JobProcessingError(last_error + " Analysis attempts exhausted; check diagnostics.",
-                             code="analysis_exhausted", diagnostics={
+                             code=failure_code, diagnostics={
                                  **(last_diagnostics or {"stage": "gemini_request"}), "attempts": failed_attempts})
 
 class FormatTextRequest(BaseModel):
@@ -384,6 +401,8 @@ class FormatTextRequest(BaseModel):
 
 class CreateJobRequest(FormatTextRequest):
     request_id: str
+    checkpoint_only: bool = False
+    resume_checkpoint: Optional[dict] = None
 
 
 _job_store = None
@@ -395,7 +414,8 @@ def get_job_store():
     with _job_store_lock:
         if _job_store is None:
             directory = os.getenv("BTOOLS_JOB_DIR", os.path.join(os.path.dirname(__file__), "job_data"))
-            _job_store = JobStore(directory)
+            _job_store = JobStore(directory, max_pending=1, isolated=True,
+                                  worker_timeout=int(os.getenv("BTOOLS_WORKER_TIMEOUT_SECONDS", "1500")))
         return _job_store
 
 
@@ -407,9 +427,22 @@ def require_job_token(x_btools_token: Optional[str] = Header(default=None)):
         raise HTTPException(status_code=401, detail="Invalid job API token")
 
 
-def render_background_job(raw_text, api_keys, output_path, source_document=None):
-    with job_stage("ai_analysis"):
-        data = call_gemini_api(raw_text, api_keys, source_document) if source_document is not None else call_gemini_api(raw_text, api_keys)
+def render_background_job(raw_text, api_keys, output_path, source_document=None,
+                          checkpoint_only=False, resume_checkpoint=None):
+    from checkpoints import make_checkpoint, restore_checkpoint
+    if resume_checkpoint is not None:
+        with job_stage("checkpoint_restore"):
+            data = restore_checkpoint(resume_checkpoint, raw_text, source_document)
+    else:
+        with job_stage("ai_analysis"):
+            data = call_gemini_api(raw_text, api_keys, source_document) if source_document is not None else call_gemini_api(raw_text, api_keys)
+    if checkpoint_only:
+        checkpoint = make_checkpoint(raw_text, source_document, data)
+        path = Path(output_path).with_suffix(".checkpoint.json")
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(checkpoint, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(path)
+        return None, data.get("_ai_model_used", "gemini-unknown"), None, "checkpoint_ready"
     title = data.get("course_title_en") or data.get("course_title_th") or "Course Outline"
     title = re.sub(r'[\r\n\t/\\:*?"<>|]', ' ', str(title)).replace("หลักสูตร", "").strip()
     title = re.sub(r'\s+', ' ', title)[:160] or "Course Outline"
@@ -444,10 +477,22 @@ def create_job(req: CreateJobRequest):
         except (JobProcessingError, KeyError, TypeError, AttributeError) as e:
             raise HTTPException(status_code=400, detail="Invalid structured source: " + (str(e) if isinstance(e, JobProcessingError) else "invalid shape"))
     keys = ",".join(k for k in (req.api_key, os.getenv("GEMINI_API_KEY")) if k)
-    if not keys.strip(", "):
+    if not keys.strip(", ") and req.resume_checkpoint is None:
         raise HTTPException(status_code=400, detail="Missing Gemini API key")
+    options = {}
+    if req.checkpoint_only or req.resume_checkpoint is not None:
+        if req.checkpoint_only and req.resume_checkpoint is not None:
+            raise HTTPException(status_code=400, detail="Choose analysis or checkpoint restore")
+        options = {"checkpoint_only": req.checkpoint_only, "resume_checkpoint": req.resume_checkpoint}
+        if req.resume_checkpoint is not None:
+            from checkpoints import restore_checkpoint
+            try:
+                restore_checkpoint(req.resume_checkpoint, req.raw_text, req.source_document)
+            except JobProcessingError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
     try:
-        return get_job_store().submit(req.request_id, req.raw_text, keys, render_background_job, source_document=req.source_document)
+        return get_job_store().submit(req.request_id, req.raw_text, keys, render_background_job,
+                                      source_document=req.source_document, options=options)
     except JobConflict as e:
         raise HTTPException(status_code=409, detail=str(e))
     except QueueFull as e:
@@ -473,6 +518,22 @@ def job_result(job_id: str):
     return FileResponse(path=str(path), filename=job["filename"],
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         headers={"X-AI-Model-Used": job["model"] or "gemini-unknown"})
+
+
+@app.get("/api/jobs/{job_id}/checkpoint", dependencies=[Depends(require_job_token)])
+def job_checkpoint(job_id: str):
+    job = job_status(job_id)
+    if job["status"] != "checkpoint_ready":
+        raise HTTPException(status_code=409, detail="Checkpoint is not ready")
+    path = get_job_store().result_path(job_id).with_suffix(".checkpoint.json")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Checkpoint storage was reset")
+    return FileResponse(str(path), media_type="application/json")
+
+
+@app.get("/healthz")
+def health():
+    return {"status": "ok", "recovery_protocol": 1}
 
 
 @app.get("/api/jobs/{job_id}/audit", dependencies=[Depends(require_job_token)])

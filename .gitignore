@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+job_data/
+.test_dependencies/
+.venv/
+test-jobs-*/
+test-recovery-*/
+verification_reference/
+/*.docx
+/.apps*/
