@@ -71,11 +71,13 @@ def job_stage(stage):
 
 
 class JobStore:
-    def __init__(self, directory, max_pending=2):
+    def __init__(self, directory, max_pending=2, isolated=False, worker_timeout=1500):
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self.database = self.directory / "jobs.sqlite3"
         self.max_pending = max_pending
+        self.isolated = isolated
+        self.worker_timeout = worker_timeout
         self.lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="course-outline")
         with self._connect() as db:
@@ -125,9 +127,11 @@ class JobStore:
         canonical = str(uuid.UUID(job_id))
         return self.directory / (canonical + ".docx")
 
-    def submit(self, request_id, raw_text, api_keys, render, source_document=None):
+    def submit(self, request_id, raw_text, api_keys, render, source_document=None, options=None):
         content = raw_text if source_document is None else json.dumps(
             {"raw_text": raw_text, "source_document": source_document}, sort_keys=True, ensure_ascii=False)
+        if options:
+            content += json.dumps(options, sort_keys=True, ensure_ascii=False)
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         with self.lock:
             self.cleanup()
@@ -145,7 +149,7 @@ class JobStore:
                 db.execute("INSERT INTO jobs (id,request_id,digest,status,created,updated) VALUES (?,?,?,'queued',?,?)",
                            (job_id, request_id, digest, now, now))
             try:
-                self.executor.submit(self._run, job_id, raw_text, api_keys, render, source_document)
+                self.executor.submit(self._run, job_id, raw_text, api_keys, render, source_document, options or {})
             except RuntimeError:
                 self._update(job_id, "failed", error="Worker is shutting down; submit a new request.")
             return self.get(job_id)
@@ -156,13 +160,24 @@ class JobStore:
                        (status, time.time(), filename, model, error, int(review_required), int(audit_available),
                         json.dumps(diagnostics) if diagnostics else None, job_id))
 
-    def _run(self, job_id, raw_text, api_keys, render, source_document=None):
+    def _run(self, job_id, raw_text, api_keys, render, source_document=None, options=None):
         context_token = _job_context.set(job_id)
         self._update(job_id, "processing")
         path = self.result_path(job_id)
         try:
-            result = render(raw_text, api_keys, str(path), source_document) if source_document is not None else render(raw_text, api_keys, str(path))
+            if self.isolated:
+                from job_process import run_isolated
+                result = run_isolated(raw_text, api_keys, str(path), source_document, options or {}, self.worker_timeout)
+            elif options:
+                result = render(raw_text, api_keys, str(path), source_document, **options)
+            else:
+                result = render(raw_text, api_keys, str(path), source_document) if source_document is not None else render(raw_text, api_keys, str(path))
             filename, model = result[:2]
+            if len(result) > 3 and result[3] == "checkpoint_ready":
+                if not path.with_suffix(".checkpoint.json").is_file():
+                    raise JobProcessingError("Worker produced no checkpoint.", code="missing_checkpoint")
+                self._update(job_id, "checkpoint_ready", model=model)
+                return
             audit = result[2] if len(result) > 2 else None
             with job_stage("result_persistence"):
                 if not path.is_file() or path.stat().st_size == 0:
@@ -188,11 +203,12 @@ class JobStore:
 
     def cleanup(self, retention_seconds=7 * 24 * 3600):
         with self._connect() as db:
-            rows = db.execute("SELECT id FROM jobs WHERE status IN ('succeeded','failed') AND updated<?",
+            rows = db.execute("SELECT id FROM jobs WHERE status IN ('succeeded','failed','checkpoint_ready') AND updated<?",
                               (time.time() - retention_seconds,)).fetchall()
             for row in rows:
                 self.result_path(row["id"]).unlink(missing_ok=True)
                 self.result_path(row["id"]).with_suffix(".audit.json").unlink(missing_ok=True)
+                self.result_path(row["id"]).with_suffix(".checkpoint.json").unlink(missing_ok=True)
                 db.execute("DELETE FROM jobs WHERE id=?", (row["id"],))
 
     def close(self):

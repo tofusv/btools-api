@@ -11,11 +11,85 @@ const HTTP_TIMEOUT_SECONDS = 60;
 const RUN_RESERVE_MS = 15000;
 var runDeadlineMs = 0;
 const MAX_NEW_FILES = 1;
-const MAX_ACTIVE_FILES = 2;
+const MAX_ACTIVE_FILES = 1;
 const MAX_JOB_WAIT_MS = 90 * 60 * 1000;
 const JOB_PROPERTY_PREFIX = "BTOOLS_JOB_";
 // Set false only while using the original server before installing this update.
 const USE_REFERENCE_SOURCE = true;
+const FREE_PLAN_RECOVERY = true;
+const RECOVERY_FOLDER_NAME = '_BTools_Recovery';
+
+function recoveryFolder() {
+  var output = DriveApp.getFolderById(cleanFolderId(OUTPUT_FOLDER_ID));
+  var matches = output.getFoldersByName(RECOVERY_FOLDER_NAME);
+  return matches.hasNext() ? matches.next() : output.createFolder(RECOVERY_FOLDER_NAME);
+}
+function recoveryJson(name, data) {
+  var folder = recoveryFolder(), matches = folder.getFilesByName(name);
+  if (matches.hasNext()) return matches.next();
+  return folder.createFile(Utilities.newBlob(JSON.stringify(data), 'application/json', name));
+}
+function sourceSnapshot(file, state) {
+  if (!state.workflowId) { state.workflowId = state.requestId; saveState(file.getId(), state); }
+  var saved;
+  if (state.sourceSnapshotId) saved = DriveApp.getFileById(state.sourceSnapshotId);
+  else {
+    var matches = recoveryFolder().getFilesByName(state.workflowId + '.source.json');
+    saved = matches.hasNext() ? matches.next() : recoveryJson(state.workflowId + '.source.json', readSourcePayload(file));
+    state.sourceSnapshotId = saved.getId();
+    saveState(file.getId(), state);
+  }
+  return JSON.parse(saved.getBlob().getDataAsString());
+}
+function deferJob(file, state, reason, minimumMs) {
+  state.transientCount = (state.transientCount || 0) + 1;
+  var delay = Math.min(6 * 60 * 60 * 1000, (minimumMs || 60000) * Math.pow(2, Math.min(state.transientCount - 1, 8)));
+  state.nextAttemptAt = Date.now() + delay + Math.floor(Math.random() * 30000);
+  state.lastError = reason;
+  saveState(file.getId(), state);
+  Logger.log('พักงานไว้ลองใหม่: ' + state.originalName + ' | ' + reason);
+}
+function pauseJob(file, state, reason) {
+  state.paused = true; state.lastError = reason;
+  saveState(file.getId(), state);
+  file.setName('[ATTENTION]_' + state.originalName.replace(/^\[RETRY_\d+\]_/, ''));
+  Logger.log('ต้องตรวจแก้: ' + reason + ' | ' + state.originalName);
+}
+function resetAttempt(file, state, reason, minimumMs) {
+  state.requestId = Utilities.getUuid();
+  delete state.jobId;
+  delete state.auditFileId;
+  state.auditRequired = false;
+  state.reviewRequired = false;
+  state.startedAt = Date.now();
+  deferJob(file, state, reason, minimumMs);
+}
+function collectCheckpoint(file, state) {
+  var marker = state.workflowId + '.checkpoint.json';
+  var matches = recoveryFolder().getFilesByName(marker);
+  var saved = state.checkpointFileId ? DriveApp.getFileById(state.checkpointFileId) :
+    (matches.hasNext() ? matches.next() : null);
+  if (!saved) {
+    var response = jobRequest('/api/jobs/' + encodeURIComponent(state.jobId) + '/checkpoint');
+    if (response.getResponseCode() === 404) { resetAttempt(file, state, 'จุดพักหายก่อนบันทึกลง Drive'); return; }
+    if (response.getResponseCode() !== 200) throw new Error('ดาวน์โหลดจุดพัก HTTP ' + response.getResponseCode());
+    saved = recoveryJson(marker, JSON.parse(response.getContentText()));
+  }
+  // Save checkpoint identity before changing request identity; safe after a hard timeout.
+  state.checkpointFileId = saved.getId();
+  state.requestId = Utilities.getUuid();
+  delete state.jobId;
+  state.startedAt = Date.now();
+  state.transientCount = 0; state.nextAttemptAt = 0;
+  saveState(file.getId(), state);
+  submitFile(file, state);
+}
+function cleanRecovery(state) {
+  [state.sourceSnapshotId, state.checkpointFileId].forEach(function(id) {
+    if (!id) return;
+    try { DriveApp.getFileById(id).setTrashed(true); } catch (e) { Logger.log('เก็บไฟล์กู้คืนไว้ เนื่องจากล้างไม่สำเร็จ'); }
+  });
+}
 
 function cleanFolderId(idStr) {
   return idStr ? idStr.trim().split('/folders/').pop().split('?')[0].split('/')[0].trim() : '';
@@ -113,21 +187,39 @@ function deleteState(fileId) {
   PropertiesService.getScriptProperties().deleteProperty(JOB_PROPERTY_PREFIX + fileId);
 }
 function retryFile(file, state, reason) {
+  if (FREE_PLAN_RECOVERY && state.workflowId) {
+    state.failureCount = (state.failureCount || 0) + 1;
+    if (state.failureCount > 3) pauseJob(file, state, reason);
+    else resetAttempt(file, state, reason);
+    return;
+  }
   Logger.log('ลองใหม่: ' + state.originalName + ' — ' + reason);
   handleRetryRename(file, state.originalName);
   deleteState(file.getId());
 }
 function submitFile(file, state) {
   checkpoint(file, state, 'source_read');
-  var payload = readSourcePayload(file);
+  var payload = FREE_PLAN_RECOVERY ? sourceSnapshot(file, state) : readSourcePayload(file);
   if (payload.raw_text !== undefined && !payload.raw_text.trim()) {
     file.setName('[SKIP]_' + state.originalName.replace(/^\[RETRY_\d+\]_/, ''));
+    if (FREE_PLAN_RECOVERY) cleanRecovery(state);
     deleteState(file.getId());
     Logger.log('ไฟล์ว่างหรืออ่านเนื้อหาไม่ได้: ' + state.originalName);
     return;
   }
   payload.api_key = GEMINI_API_KEY;
   payload.request_id = state.requestId;
+  if (FREE_PLAN_RECOVERY) {
+    if (!state.checkpointFileId) {
+      var checkpoints = recoveryFolder().getFilesByName(state.workflowId + '.checkpoint.json');
+      if (checkpoints.hasNext()) {
+        state.checkpointFileId = checkpoints.next().getId();
+        saveState(file.getId(), state);
+      }
+    }
+    if (state.checkpointFileId) payload.resume_checkpoint = JSON.parse(DriveApp.getFileById(state.checkpointFileId).getBlob().getDataAsString());
+    else payload.checkpoint_only = true;
+  }
   checkpoint(file, state, 'job_submit');
   var response = jobRequest('/api/jobs', payload);
   var code = response.getResponseCode();
@@ -135,15 +227,20 @@ function submitFile(file, state) {
     var job = JSON.parse(response.getContentText());
     if (!job.id) throw new Error('Render returned no job id');
     state.jobId = job.id;
+    state.nextAttemptAt = 0;
     saveState(file.getId(), state);
     file.setName('[PROCESSING]_' + state.originalName);
     Logger.log('รับงานแล้ว: ' + state.originalName + ' | Job ' + job.id + ' | ' + job.status);
-  } else if (code === 401 || code === 403 || code === 503) {
+  } else if (FREE_PLAN_RECOVERY && (code === 401 || code === 403)) {
+    pauseJob(file, state, 'ตรวจสิทธิ์ BTOOLS_API_TOKEN (HTTP ' + code + ')');
+  } else if (!FREE_PLAN_RECOVERY && (code === 401 || code === 403 || code === 503)) {
     throw new Error('ตรวจ BTOOLS_API_TOKEN และการตั้งค่า Render (HTTP ' + code + ')');
   } else if (code === 429 || code >= 500) {
+    if (FREE_PLAN_RECOVERY) { deferJob(file, state, 'บริการยังไม่พร้อม HTTP ' + code); return; }
     // Keep requestId: the response might have been lost after acceptance.
     Logger.log('Render ยังไม่พร้อมรับงาน รอรอบถัดไป (HTTP ' + code + ')');
-  } else { retryFile(file, state, 'รับงานไม่สำเร็จ HTTP ' + code); }
+  } else if (FREE_PLAN_RECOVERY) { pauseJob(file, state, 'ตรวจต้นฉบับหรือจุดพัก HTTP ' + code); }
+  else { retryFile(file, state, 'รับงานไม่สำเร็จ HTTP ' + code); }
 }
 function finishFile(file, state, outputFolder, job) {
   state.reviewRequired = state.reviewRequired || !!job.review_required;
@@ -160,6 +257,7 @@ function finishFile(file, state, outputFolder, job) {
     }
     if (!auditFile) {
       var auditResponse = jobRequest('/api/jobs/' + encodeURIComponent(state.jobId) + '/audit');
+      if (FREE_PLAN_RECOVERY && auditResponse.getResponseCode() === 404) { retryFile(file, state, 'รายงานหายหลัง restart'); return; }
       if (auditResponse.getResponseCode() !== 200) throw new Error('ดาวน์โหลดรายงานตรวจสอบ HTTP ' + auditResponse.getResponseCode());
       auditFile = outputFolder.createFile(auditResponse.getBlob().setName(auditMarker));
     }
@@ -191,23 +289,51 @@ function finishFile(file, state, outputFolder, job) {
     (state.reviewRequired ? ' | REVIEW REQUIRED: ตรวจรายงานท้ายเอกสารและ .review.json' : ''));
   file.setName((state.reviewRequired ? '[REVIEW]_' : '[DONE]_') + state.originalName.replace(/^\[RETRY_\d+\]_/, ''));
   deleteState(file.getId());
+  if (FREE_PLAN_RECOVERY) cleanRecovery(state);
   Logger.log('บันทึกสำเร็จ: ' + state.filename + ' | ' + (job.model || 'unknown'));
 }
 function checkFile(file, state, outputFolder) {
+  if (FREE_PLAN_RECOVERY && !state.workflowId) {
+    state.workflowId = state.requestId;
+    saveState(file.getId(), state);
+  }
+  if (FREE_PLAN_RECOVERY && (state.paused || state.nextAttemptAt > Date.now())) return;
+  if (FREE_PLAN_RECOVERY && state.jobId && state.filename && !state.outputFileId) {
+    var savedOutputs = outputFolder.getFilesByName('__BTOOLS_JOB_' + state.jobId + '.docx');
+    if (savedOutputs.hasNext()) {
+      state.outputFileId = savedOutputs.next().getId();
+      saveState(file.getId(), state);
+    }
+  }
   if (state.outputFileId) { finishFile(file, state, outputFolder, {filename: state.filename}); return; }
   if (!state.jobId) {
-    if (Date.now() - state.startedAt > MAX_JOB_WAIT_MS) retryFile(file, state, 'ส่งงานไม่สำเร็จภายในเวลาที่กำหนด');
+    if (!FREE_PLAN_RECOVERY && Date.now() - state.startedAt > MAX_JOB_WAIT_MS) retryFile(file, state, 'ส่งงานไม่สำเร็จภายในเวลาที่กำหนด');
     else submitFile(file, state); // Same requestId prevents duplicate work.
     return;
   }
   checkpoint(file, state, 'job_status');
   var response = jobRequest('/api/jobs/' + encodeURIComponent(state.jobId));
   var code = response.getResponseCode();
-  if (code === 404) { retryFile(file, state, 'เซิร์ฟเวอร์ไม่พบงานเดิม'); return; }
+  if (code === 404) {
+    if (FREE_PLAN_RECOVERY && state.workflowId) resetAttempt(file, state, 'เซิร์ฟเวอร์รีสตาร์ต');
+    else retryFile(file, state, 'เซิร์ฟเวอร์ไม่พบงานเดิม');
+    return;
+  }
+  if (FREE_PLAN_RECOVERY && (code === 401 || code === 403)) { pauseJob(file, state, 'ตรวจสิทธิ์ HTTP ' + code); return; }
+  if (FREE_PLAN_RECOVERY && (code === 429 || code >= 500)) { deferJob(file, state, 'ตรวจสถานะ HTTP ' + code); return; }
   if (code !== 200) throw new Error('ตรวจสถานะ HTTP ' + code);
   var job = JSON.parse(response.getContentText());
-  if (job.status === 'succeeded') finishFile(file, state, outputFolder, job);
-  else if (job.status === 'failed') retryFile(file, state, job.error || 'ประมวลผลไม่สำเร็จ');
+  state.nextAttemptAt = 0;
+  if (FREE_PLAN_RECOVERY && job.status === 'checkpoint_ready') collectCheckpoint(file, state);
+  else if (job.status === 'succeeded') finishFile(file, state, outputFolder, job);
+  else if (job.status === 'failed') {
+    var errorCode = (job.diagnostics || {}).code;
+    if (FREE_PLAN_RECOVERY && state.workflowId && (errorCode === 'quota_exhausted' || errorCode === 'provider_unavailable')) {
+      resetAttempt(file, state, job.error, errorCode === 'quota_exhausted' ? 15 * 60 * 1000 : 60000);
+    } else if (FREE_PLAN_RECOVERY && (errorCode === 'configuration_error' || errorCode === 'invalid_checkpoint' || errorCode === 'output_truncated')) {
+      pauseJob(file, state, job.error);
+    } else retryFile(file, state, job.error || 'ประมวลผลไม่สำเร็จ');
+  }
   else if (Date.now() - state.startedAt > MAX_JOB_WAIT_MS) {
     // Do not resubmit a job still running, which would duplicate API work.
     Logger.log('งานรอนานผิดปกติ กรุณาตรวจ Render: ' + state.originalName + ' | ' + state.jobId);
@@ -240,13 +366,13 @@ function processNewCourseOutlines() {
       } catch (e) { Logger.log('ตรวจงานยังไม่สำเร็จ จะตรวจใหม่รอบหน้า: ' + e.toString()); }
     }
     var activeCount = Object.keys(properties.getProperties()).filter(function(key) {
-      return key.indexOf(JOB_PROPERTY_PREFIX) === 0;
+      return key.indexOf(JOB_PROPERTY_PREFIX) === 0 && !JSON.parse(properties.getProperty(key)).paused;
     }).length;
     var files = inputFolder.getFiles(), submitted = 0;
     while (files.hasNext() && submitted < MAX_NEW_FILES && activeCount < MAX_ACTIVE_FILES) {
       if (Date.now() - started >= RUN_BUDGET_MS) break;
       var file = files.next(), name = file.getName();
-      if (properties.getProperty(JOB_PROPERTY_PREFIX + file.getId()) || /^\[(DONE|SKIP|PROCESSING|REVIEW)\]_/.test(name)) continue;
+      if (properties.getProperty(JOB_PROPERTY_PREFIX + file.getId()) || /^\[(DONE|SKIP|PROCESSING|REVIEW|ATTENTION)\]_/.test(name)) continue;
       if (file.getMimeType() !== MimeType.GOOGLE_DOCS && !/\.docx$/i.test(name)) continue;
       var state = {originalName: name, requestId: Utilities.getUuid(), startedAt: Date.now()};
       saveState(file.getId(), state); // BEFORE rename, extraction, and HTTP.
@@ -275,6 +401,33 @@ function recoverStuckFiles() {
     }
     Logger.log('คืนสถานะไฟล์ค้างเดิม ' + count + ' ไฟล์แล้ว');
   } finally { lock.releaseLock(); }
+}
+/** After fixing configuration, resume paused jobs without losing their snapshots. */
+function resumePausedJobs() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) return;
+  try {
+    var properties = PropertiesService.getScriptProperties(), states = properties.getProperties();
+    Object.keys(states).filter(function(key) { return key.indexOf(JOB_PROPERTY_PREFIX) === 0; }).forEach(function(key) {
+      var state = JSON.parse(states[key]);
+      if (!state.paused) return;
+      var file = DriveApp.getFileById(key.slice(JOB_PROPERTY_PREFIX.length));
+      state.paused = false; state.failureCount = 0; state.transientCount = 0;
+      state.nextAttemptAt = 0; state.requestId = Utilities.getUuid(); delete state.jobId;
+      saveState(file.getId(), state);
+      file.setName('[PROCESSING]_' + state.originalName);
+    });
+  } finally { lock.releaseLock(); }
+}
+/** Read-only status overview, available from the Apps Script execution log. */
+function showJobStatus() {
+  var states = PropertiesService.getScriptProperties().getProperties();
+  Object.keys(states).filter(function(key) { return key.indexOf(JOB_PROPERTY_PREFIX) === 0; }).forEach(function(key) {
+    var state = JSON.parse(states[key]);
+    Logger.log(JSON.stringify({file: state.originalName, job: state.jobId || '', paused: !!state.paused,
+      stage: state.lastOperation, nextAttemptAt: state.nextAttemptAt || 0,
+      checkpointSaved: !!state.checkpointFileId, error: state.lastError || ''}));
+  });
 }
 function handleRetryRename(file, originalName) {
   var match = originalName.match(/^\[RETRY_(\d+)\]_(.*)$/);
