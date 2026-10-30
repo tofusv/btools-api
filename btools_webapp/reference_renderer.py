@@ -169,18 +169,3 @@ def render_reference_document(doc, payload, fmt):
                          in_cell, node.get('category') or category)
             index += 1
     sequence(doc, payload['roots'])
-    audit = payload['audit']
-    if audit['review_required']:
-        p = doc.add_paragraph(); p.paragraph_format.page_break_before = True
-        run(p, 'รายการที่ต้องตรวจสอบก่อนนำเอกสารไปใช้', True, 12)
-        run(doc.add_paragraph(), 'ส่วนนี้เป็นรายงานตรวจสอบ แยกจากเนื้อหาหลักสูตร')
-        if audit['missing_from_ai_plan']:
-            run(doc.add_paragraph(), 'มีข้อความหรือตารางที่ AI ยังจัดโครงสร้างไม่ครบ ระบบเก็บไว้ในหมวดเนื้อหาต้นฉบับที่รอตรวจสอบแล้ว')
-        if audit['uncertain_nodes']:
-            run(doc.add_paragraph(), 'AI ระบุหัวข้อที่ต้องตรวจโครงสร้าง: ' + ', '.join(audit['uncertain_nodes']))
-        for warning in audit['warnings']:
-            run(doc.add_paragraph(), warning)
-        for edit in audit['edits']:
-            label = 'แก้ไขแล้ว' if edit['applied'] else 'ข้อเสนอแก้คำ ยังไม่ได้แก้ต้นฉบับ'
-            run(doc.add_paragraph(), label + ': ' + edit['original'] + ' → ' + edit['replacement'])
-            run(doc.add_paragraph(), 'เหตุผลที่ AI เสนอ: ' + edit['reason'])

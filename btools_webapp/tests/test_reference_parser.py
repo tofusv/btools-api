@@ -146,6 +146,20 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(data['_reference_document']['source']['blocks'][0]['text'], 'teem')
         self.assertTrue(data['_audit']['review_required'])
 
+    def test_review_report_stays_outside_course_document(self):
+        source = source_from_text('Course content')
+        source['warnings'] = ['พบข้อความใน word/footer1.xml ที่อยู่นอกเนื้อหาเอกสาร']
+        data = resolve_plan(source, plan([node('a', 'paragraph', 'B000001', 'Course content')]))
+        self.assertTrue(data['_audit']['review_required'])
+        self.assertEqual(data['_audit']['warnings'], source['warnings'])
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            path = Path(tmp) / 'course.docx'
+            generate_doc(data, str(path))
+            text = '\n'.join(p.text for p in Document(path).paragraphs)
+            self.assertIn('Course content', text)
+            self.assertNotIn('รายการที่ต้องตรวจสอบก่อนนำเอกสารไปใช้', text)
+            self.assertNotIn('word/footer1.xml', text)
+
     def test_overlapping_edits_rejected(self):
         source = source_from_text('teem')
         edit = {'block_id': 'B000001', 'start': 0, 'end': 4, 'replacement': 'team', 'reason': 'spelling'}
@@ -161,7 +175,9 @@ class ReferenceTests(unittest.TestCase):
             path = Path(tmp) / 'edited.docx'; generate_doc(data, str(path))
             paragraphs = [p.text for p in Document(path).paragraphs]
             self.assertEqual(paragraphs[0], 'team')
-            self.assertTrue(any('teem → team' in p for p in paragraphs))
+            self.assertFalse(any('teem → team' in p for p in paragraphs))
+            self.assertEqual(data['_audit']['edits'][0]['original'], 'teem')
+            self.assertEqual(data['_audit']['edits'][0]['replacement'], 'team')
 
     def test_numbered_lists_from_word_styles_keep_original_labels(self):
         doc = Document(); doc.add_paragraph('First', 'List Number'); doc.add_paragraph('Second', 'List Number')
